@@ -27,6 +27,7 @@ from app.routers import (
     enrichment_router,
     health_router,
     jobs_router,
+    parse_check_router,
     resume_wizard_router,
     resumes_router,
 )
@@ -113,6 +114,7 @@ app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(enrichment_router, prefix="/api/v1")
 app.include_router(applications_router, prefix="/api/v1")
 app.include_router(resume_wizard_router, prefix="/api/v1")
+app.include_router(parse_check_router, prefix="/api/v1")
 
 
 @app.get("/")
