@@ -1,19 +1,23 @@
-"""SQLAlchemy (SQLite) data layer for Resume Matcher.
+"""SQLAlchemy data layer for Resume Matcher (SQLite by default, optional PostgreSQL).
 
 This is a behavior-preserving replacement for the original TinyDB wrapper. The
 ``Database`` facade keeps the same method names/signatures and returns **plain
 dicts** (never ORM rows), so the ~50 call sites only needed ``await`` added.
 
-Two engines back one SQLite file:
-- an **async** engine (``aiosqlite``) for the document tables and applications;
+Two engines back one database (the SQLite file, or the PostgreSQL database
+named by ``DATABASE_URL``):
+- an **async** engine (``aiosqlite`` / psycopg) for the document tables and
+  applications;
 - a **sync** engine for the encrypted ``api_keys`` table, which is read on the
   synchronous LLM hot path (``get_llm_config`` → ``resolve_api_key``).
+
+Writes on both engines take one global writer reservation: ``BEGIN IMMEDIATE``
+on SQLite, a transaction-scoped advisory lock on PostgreSQL.
 """
 
 import copy
 import logging
 import shutil
-import sqlite3
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
@@ -22,12 +26,18 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from sqlalchemy import and_, delete, func, or_, select, text, update
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.sql.elements import TextClause
 
 from app.config import settings
-from app.db_engine import init_models_sync, make_async_engine, make_sync_engine
+from app.db_engine import (
+    init_models_sync,
+    make_async_engine,
+    make_sync_engine,
+    normalize_database_url,
+)
 from app.models import ApiKey, Application, Improvement, Job, Resume, TailoringPreview
 from app.preview import (
     PreviewBusyError,
@@ -57,21 +67,39 @@ APPLICATION_STATUSES: tuple[str, ...] = (
 ProcessingFinishOutcome = Literal["committed", "stale", "missing"]
 
 
+# Key of the PostgreSQL transaction-scoped advisory lock that serializes every
+# writer (async documents and sync api_keys alike), mirroring SQLite's single
+# reserved writer. Any stable bigint works; this one spells "RMWR".
+POSTGRES_WRITER_LOCK_KEY = 0x524D5752
+
+# lock_not_available (lock_timeout), serialization_failure, deadlock_detected.
+_POSTGRES_BUSY_SQLSTATES = frozenset({"55P03", "40001", "40P01"})
+
+
 class DatabaseBusyError(RuntimeError):
     """A write reservation could not be obtained; retry the unchanged request."""
 
 
+def _is_busy_error(error: DBAPIError) -> bool:
+    """Return whether a driver error is transient write contention."""
+    sqlstate = getattr(error.orig, "sqlstate", None)
+    if sqlstate is not None:
+        return sqlstate in _POSTGRES_BUSY_SQLSTATES
+    code = getattr(error.orig, "sqlite_errorcode", None)
+    if not isinstance(code, int):
+        return False
+    import sqlite3  # SQLite dialect only; absent from the PostgreSQL path.
+
+    return code & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+
+
 @contextmanager
 def _translate_write_errors() -> Iterator[None]:
-    """Expose only SQLite contention as retryable, for async and sync writers."""
+    """Expose only lock contention as retryable, for async and sync writers."""
     try:
         yield
-    except OperationalError as error:
-        code = getattr(error.orig, "sqlite_errorcode", None)
-        if isinstance(code, int) and code & 0xFF in (
-            sqlite3.SQLITE_BUSY,
-            sqlite3.SQLITE_LOCKED,
-        ):
+    except DBAPIError as error:
+        if _is_busy_error(error):
             raise DatabaseBusyError("Database is busy") from error
         raise
 
@@ -99,14 +127,49 @@ def _now() -> str:
 class Database:
     """Async SQLAlchemy facade for resume matcher data."""
 
-    def __init__(self, db_path: Path | None = None):
-        self.db_path = db_path or settings.sqlite_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(
+        self, db_path: Path | None = None, *, database_url: str | None = None
+    ) -> None:
+        """Bind to a SQLite file or, with ``database_url``, to PostgreSQL.
+
+        With neither argument, ``settings.database_url`` (``DATABASE_URL``)
+        selects PostgreSQL and otherwise ``settings.sqlite_path`` is used. An
+        explicit ``db_path`` always means SQLite.
+        """
+        if database_url is None and db_path is None:
+            database_url = settings.database_url
+        self.database_url: str | None = (
+            normalize_database_url(database_url) if database_url else None
+        )
+        self.db_path: Path | None = None
+        if self.database_url is None:
+            self.db_path = db_path or settings.sqlite_path
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._async_engine = None
         self._async_session_factory: async_sessionmaker[AsyncSession] | None = None
         self._sync_engine = None
         self._sync_session_factory: sessionmaker[Session] | None = None
         self._initialized = False
+
+    @property
+    def dialect(self) -> Literal["sqlite", "postgresql"]:
+        """The configured storage backend."""
+        return "sqlite" if self.database_url is None else "postgresql"
+
+    @property
+    def _engine_target(self) -> Path | str:
+        """What the engine factories connect to: a SQLite path or a PG URL."""
+        if self.database_url is not None:
+            return self.database_url
+        assert self.db_path is not None
+        return self.db_path
+
+    @property
+    def _reserve_writer(self) -> TextClause:
+        """First statement of every write transaction (global writer lock)."""
+        if self.dialect == "postgresql":
+            return text(f"SELECT pg_advisory_xact_lock({POSTGRES_WRITER_LOCK_KEY})")
+        return text("BEGIN IMMEDIATE")
 
     # -- engine / session plumbing ------------------------------------------
 
@@ -115,16 +178,16 @@ class Database:
 
         Tables are created via the **sync** engine so both the sync (api_keys)
         and async (docs) paths see them immediately, without needing an event
-        loop. Both engines point at the same file.
+        loop. Both engines point at the same database.
         """
         if self._initialized:
             return
-        self._sync_engine = make_sync_engine(self.db_path)
+        self._sync_engine = make_sync_engine(self._engine_target)
         self._sync_session_factory = sessionmaker(
             self._sync_engine, expire_on_commit=False
         )
         init_models_sync(self._sync_engine)
-        self._async_engine = make_async_engine(self.db_path)
+        self._async_engine = make_async_engine(self._engine_target)
         self._async_session_factory = async_sessionmaker(
             self._async_engine, expire_on_commit=False
         )
@@ -138,15 +201,16 @@ class Database:
 
     @asynccontextmanager
     async def _write_session(self) -> AsyncIterator[AsyncSession]:
-        """Reserve SQLite's writer before reading state that a write depends on.
+        """Reserve the database writer before reading state a write depends on.
 
         The database reservation serializes across connections and processes,
         unlike an in-memory lock. Callers commit the complete operation; closing
-        the session rolls back every change if any stage raises.
+        the session rolls back every change if any stage raises (and, on
+        PostgreSQL, releases the transaction-scoped advisory lock).
         """
         with _translate_write_errors():
             async with self._session() as session:
-                await session.execute(text("BEGIN IMMEDIATE"))
+                await session.execute(self._reserve_writer)
                 yield session
 
     @property
@@ -160,11 +224,11 @@ class Database:
         """Reserve a synchronous key-store writer with the same busy contract."""
         with _translate_write_errors():
             with self._sync() as session:
-                session.execute(text("BEGIN IMMEDIATE"))
+                session.execute(self._reserve_writer)
                 yield session
 
     async def close(self) -> None:
-        """Dispose engines and release file handles."""
+        """Dispose engines and release file handles / pooled connections."""
         if self._async_engine is not None:
             await self._async_engine.dispose()
             self._async_engine = None
