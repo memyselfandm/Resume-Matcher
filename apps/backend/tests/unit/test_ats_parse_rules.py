@@ -48,6 +48,11 @@ def _stack(x0: float, widths: list[float], top: float = 700.0) -> list[TextLine]
     ]
 
 
+def _layout(lines: list[TextLine]) -> dict[str, CheckResult]:
+    document = ExtractedDocument(file_format="pdf", text="x", pages=(_page(lines),), total_pages=1)
+    return {check.id: check for check in run_layout_checks(document)}
+
+
 class TestGutterDetector:
     def test_true_columns_produce_a_tall_gutter(self) -> None:
         widths = [250.0, 230.0, 240.0, 210.0] * 6
@@ -75,18 +80,33 @@ class TestGutterDetector:
             full = top - 3 * LINE_STEP
             lines.append(TextLine(30.0, full - LINE_HEIGHT, 582.0, full, "full width"))
             top = full - LINE_STEP
-        candidates = find_gutters(_page(lines))
         text_height = max(l.y1 for l in lines) - min(l.y0 for l in lines)
-        assert candidates
+        candidates = find_gutters(_page(lines))
         assert all((c.run_top - c.run_bottom) / text_height < 0.4 for c in candidates)
-        document = ExtractedDocument(
-            file_format="pdf", text="x", pages=(_page(lines),), total_pages=1
-        )
-        checks = {check.id: check for check in run_layout_checks(document)}
-        # Short side-by-side blocks are not a page-level column layout...
+        checks = _layout(lines)
         assert checks["multi_column"].status == "pass"
-        # ...but a narrow block beside main content is still a sidebar.
+
+    def test_label_value_skill_grid_is_not_a_sidebar(self) -> None:
+        """A 4-row grid inside a single-column page is neither columns nor sidebar."""
+        lines = _stack(30.0, [540.0, 520.0, 530.0, 500.0] * 8)
+        grid_top = 700.0 - 32 * LINE_STEP
+        lines += _stack(30.0, [60.0, 45.0, 70.0, 50.0], grid_top)
+        lines += _stack(200.0, [200.0, 160.0, 180.0, 120.0], grid_top)
+        lines += _stack(30.0, [540.0, 520.0, 530.0, 500.0] * 8, grid_top - 4 * LINE_STEP)
+        assert find_gutters(_page(lines)) == []
+        checks = _layout(lines)
+        assert checks["multi_column"].status == "pass"
+        assert checks["sidebar"].status == "pass"
+
+    def test_short_narrow_sidebar_beside_main_content_fails_sidebar_only(self) -> None:
+        """A sidebar covering 15-40% of the text height is a sidebar, not columns."""
+        lines = _stack(30.0, [340.0, 300.0, 320.0, 280.0] * 5)
+        lines += _stack(430.0, [120.0, 90.0, 140.0, 100.0] * 5)
+        lines += _stack(30.0, [540.0, 520.0, 530.0, 500.0] * 12, 700.0 - 20 * LINE_STEP)
+        checks = _layout(lines)
+        assert checks["multi_column"].status == "pass"
         assert checks["sidebar"].status == "fail"
+        assert checks["sidebar"].evidence["pages"][0]["side"] == "right"
 
     def test_too_few_lines_never_detect(self) -> None:
         assert find_gutters(_page(_stack(30.0, [100.0, 80.0]) + _stack(400.0, [90.0]))) == []

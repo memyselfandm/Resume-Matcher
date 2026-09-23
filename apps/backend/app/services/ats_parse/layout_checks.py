@@ -40,15 +40,19 @@ from app.services.ats_parse.content_checks import has_email, has_phone
 from app.services.ats_parse.extract import (
     MAX_ANALYZED_PAGES,
     MAX_EXTRACTED_CHARS,
+    MAX_LINES_PER_PAGE,
+    MAX_PAGE_CHARS,
     ExtractedDocument,
     PageLayout,
     TextLine,
+    check_deadline,
 )
 from app.services.ats_parse.report import CheckResult
 
 GUTTER_MIN_WIDTH_PT = 9.0
 GUTTER_MIN_HEIGHT_RATIO = 0.40
 SIDEBAR_MAX_WIDTH_RATIO = 0.35
+SIDEBAR_MIN_HEIGHT_RATIO = 0.15
 GUTTER_SCAN_STEP_PT = 1.0
 BLOCK_MIN_LINES = 3
 BLOCK_EDGE_TOLERANCE_PT = 2.0
@@ -90,27 +94,33 @@ class GutterCandidate:
 
 
 def _column_block(lines: list[TextLine]) -> list[TextLine] | None:
-    """Return the longest left-aligned, ragged-right run of consecutive lines."""
+    """Return the longest left-aligned, ragged-right run of consecutive lines.
+
+    Left edges are clustered greedily in one sorted pass (a new cluster starts
+    once an edge is more than ``BLOCK_EDGE_TOLERANCE_PT`` right of the
+    cluster's first edge), so each line is examined once: O(n log n).
+    """
     best: list[TextLine] | None = None
-    ordered = sorted(lines, key=lambda line: (line.x0, -line.y1))
-    anchors = sorted({line.x0 for line in ordered})
-    for anchor in anchors:
-        aligned = sorted(
-            (line for line in ordered if abs(line.x0 - anchor) <= BLOCK_EDGE_TOLERANCE_PT),
-            key=lambda line: -line.y1,
-        )
+    clusters: list[list[TextLine]] = []
+    for line in sorted(lines, key=lambda item: item.x0):
+        if clusters and line.x0 - clusters[-1][0].x0 <= BLOCK_EDGE_TOLERANCE_PT:
+            clusters[-1].append(line)
+        else:
+            clusters.append([line])
+    for cluster in clusters:
+        if len(cluster) < BLOCK_MIN_LINES:
+            continue
         chain: list[TextLine] = []
-        for line in aligned:
+        for line in sorted(cluster, key=lambda item: -item.y1):
             if chain:
                 previous = chain[-1]
                 height = max(previous.y1 - previous.y0, line.y1 - line.y0, 1.0)
                 if previous.y0 - line.y1 > BLOCK_MAX_LINE_GAP_RATIO * height:
                     chain = []
             chain.append(line)
-            if len(chain) >= BLOCK_MIN_LINES:
+            if len(chain) >= BLOCK_MIN_LINES and (best is None or len(chain) > len(best)):
                 right_edges = [item.x1 for item in chain]
-                ragged = max(right_edges) - min(right_edges) > BLOCK_EDGE_TOLERANCE_PT
-                if ragged and (best is None or len(chain) > len(best)):
+                if max(right_edges) - min(right_edges) > BLOCK_EDGE_TOLERANCE_PT:
                     best = list(chain)
     return best
 
@@ -132,13 +142,21 @@ def _free_runs(
     return [run for run in runs if run[1] - run[0] > 0]
 
 
-def find_gutters(page: PageLayout) -> list[GutterCandidate]:
-    """Scan a page for whitespace bands that separate two column-like blocks."""
+def find_gutters(
+    page: PageLayout, deadline: float | None = None
+) -> list[GutterCandidate]:
+    """Scan a page for whitespace bands that separate two column-like blocks.
+
+    Only runs at least ``SIDEBAR_MIN_HEIGHT_RATIO`` of the text height are
+    examined; shorter side-by-side blocks (label/value skill grids, date
+    rows) are never columns or sidebars.
+    """
     lines = list(page.lines)
     if len(lines) < 2 * BLOCK_MIN_LINES:
         return []
     bottom = min(line.y0 for line in lines)
     top = max(line.y1 for line in lines)
+    min_run = SIDEBAR_MIN_HEIGHT_RATIO * (top - bottom)
     left_edge = min(line.x0 for line in lines)
     right_edge = max(line.x1 for line in lines)
     content_right = max(right_edge, page.width - left_edge)
@@ -155,11 +173,14 @@ def find_gutters(page: PageLayout) -> list[GutterCandidate]:
 
     x = left_edge
     while x + GUTTER_MIN_WIDTH_PT <= right_edge:
+        check_deadline(deadline)
         band_end = x + GUTTER_MIN_WIDTH_PT
         blockers = [
             (line.y0, line.y1) for line in lines if line.x0 < band_end and line.x1 > x
         ]
         for run_bottom, run_top in _free_runs(blockers, bottom, top):
+            if run_top - run_bottom < min_run:
+                continue
             inside = [
                 index
                 for index, line in enumerate(lines)
@@ -194,7 +215,9 @@ def _text_height(page: PageLayout) -> float:
     return max(line.y1 for line in page.lines) - min(line.y0 for line in page.lines)
 
 
-def _column_checks(document: ExtractedDocument) -> list[CheckResult]:
+def _column_checks(
+    document: ExtractedDocument, deadline: float | None
+) -> list[CheckResult]:
     if document.file_format == "docx":
         columns = document.docx.max_section_columns if document.docx else 1
         return [
@@ -217,7 +240,7 @@ def _column_checks(document: ExtractedDocument) -> list[CheckResult]:
     column_pages: list[dict[str, float | int]] = []
     sidebar_pages: list[dict[str, float | int]] = []
     for page in document.pages:
-        candidates = find_gutters(page)
+        candidates = find_gutters(page, deadline)
         if not candidates:
             continue
         text_height = _text_height(page)
@@ -256,21 +279,37 @@ def _column_checks(document: ExtractedDocument) -> list[CheckResult]:
                     ),
                 }
             )
+    # A sidebar on a page already failing multi_column is the same defect;
+    # report it once (no double penalty) and record the suppression.
+    column_page_numbers = [entry["page"] for entry in column_pages]
+    suppressed = [entry["page"] for entry in sidebar_pages if entry["page"] in column_page_numbers]
+    sidebar_pages = [entry for entry in sidebar_pages if entry["page"] not in column_page_numbers]
+    if sidebar_pages:
+        sidebar_status = "fail"
+    elif suppressed:
+        sidebar_status = "not_applicable"
+    else:
+        sidebar_status = "pass"
+    sidebar_params: dict[str, object] = {"pages": [entry["page"] for entry in sidebar_pages]}
+    if suppressed:
+        sidebar_params["suppressed_pages"] = suppressed
+    if sidebar_status == "not_applicable":
+        sidebar_params["reason"] = "covered_by_multi_column"
     return [
         CheckResult(
             id="multi_column",
             category="layout",
             severity="high",
             status="fail" if column_pages else "pass",
-            params={"pages": [entry["page"] for entry in column_pages]},
+            params={"pages": column_page_numbers},
             evidence={"pages": column_pages},
         ),
         CheckResult(
             id="sidebar",
             category="layout",
             severity="medium",
-            status="fail" if sidebar_pages else "pass",
-            params={"pages": [entry["page"] for entry in sidebar_pages]},
+            status=sidebar_status,  # type: ignore[arg-type]
+            params=sidebar_params,
             evidence={"pages": sidebar_pages},
         ),
     ]
@@ -474,7 +513,9 @@ def has_text_layer(document: ExtractedDocument) -> bool:
     return bool(_CID_RE.sub("", document.text).strip())
 
 
-def run_layout_checks(document: ExtractedDocument) -> list[CheckResult]:
+def run_layout_checks(
+    document: ExtractedDocument, deadline: float | None = None
+) -> list[CheckResult]:
     """Run every extraction and layout check in a fixed order."""
     text_layer = has_text_layer(document)
     checks = [
@@ -490,17 +531,22 @@ def run_layout_checks(document: ExtractedDocument) -> list[CheckResult]:
             category="extraction",
             severity="medium",
             status="fail"
-            if document.truncated_pages or document.truncated_chars
+            if document.truncated_pages
+            or document.truncated_chars
+            or document.dense_pages
             else "pass",
             params={
                 "pages_truncated": document.truncated_pages,
                 "chars_truncated": document.truncated_chars,
+                "dense_pages": list(document.dense_pages),
                 "page_limit": MAX_ANALYZED_PAGES,
                 "char_limit": MAX_EXTRACTED_CHARS,
+                "page_char_limit": MAX_PAGE_CHARS,
+                "page_line_limit": MAX_LINES_PER_PAGE,
             },
         ),
         *_glyph_checks(document.text),
-        *_column_checks(document),
+        *_column_checks(document, deadline),
         _table_check(document),
         *_image_checks(document),
         _text_box_check(document),
