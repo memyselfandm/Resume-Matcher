@@ -29,7 +29,7 @@ from app.services.ats_parse.layout_checks import find_gutters, run_layout_checks
 from app.services.ats_parse.messages_en import FAIL_MESSAGES, PASS_MESSAGES
 from app.services.ats_parse.normalize import normalize_text, tokenize
 from app.services.ats_parse.profiles import PROFILES, score_profiles
-from app.services.ats_parse.report import CheckResult, overall_score
+from app.services.ats_parse.report import CheckResult, content_score, overall_score
 
 LINE_HEIGHT = 9.0
 LINE_STEP = 11.0
@@ -204,6 +204,12 @@ class TestScoring:
         return CheckResult(
             id="x", category=category, severity=severity, status=status  # type: ignore[arg-type]
         )
+
+    def test_content_failures_do_not_lower_parseability(self) -> None:
+        checks = [self._check("high", category="content"), self._check("low")]
+        assert overall_score(checks) == 96
+        assert content_score(checks) == 80
+        assert content_score([self._check("low", "not_applicable", "content")]) is None
 
     def test_fatal_caps_score_at_ten(self) -> None:
         assert overall_score([self._check("fatal")]) == 0

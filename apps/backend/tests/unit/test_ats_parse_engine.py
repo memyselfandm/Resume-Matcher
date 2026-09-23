@@ -41,12 +41,26 @@ class TestExtractability:
         content = [check for check in report.checks if check.category == "content"]
         assert content and all(check.status == "not_applicable" for check in content)
 
+    def test_scores_separate_parseability_from_content(self) -> None:
+        header = _report("contact_in_header.docx")
+        # Parseability: only header_footer_contact (high) fails.
+        assert header.overall_score == 80
+        # Content: email (high), phone (medium), linkedin (low) are missing.
+        assert header.content_score == 66
+        icon = _report("icon_font.pdf")
+        assert icon.overall_score == 90
+        assert icon.content_score is not None and icon.content_score < 90
+        image = _report("image_only.pdf")
+        assert image.content_score is None
+        assert all(profile.kind == "heuristic" for profile in image.profiles)
+
     def test_clean_single_column_pdf_passes_every_check(self) -> None:
         report = _report("clean_single_column.pdf")
         assert report.extractability == "full"
         assert report.content_language == "en"
         assert [check.id for check in report.checks if check.status == "fail"] == []
         assert report.overall_score == 100
+        assert report.content_score == 100
         assert all(profile.passes for profile in report.profiles)
 
     def test_legacy_doc_is_unsupported_format(self) -> None:
@@ -233,7 +247,7 @@ class TestDeterminism:
 
     def test_report_carries_schema_version_and_ids_without_prose(self) -> None:
         report = _report("two_column.pdf")
-        assert report.schema_version == "1.0"
+        assert report.schema_version == "2.0"
         for check in report.checks:
             assert set(check.model_dump()) == {
                 "id",

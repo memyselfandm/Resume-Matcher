@@ -13,7 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "2.0"
 
 Severity = Literal["fatal", "high", "medium", "low"]
 CheckStatus = Literal["pass", "fail", "not_applicable"]
@@ -57,6 +57,7 @@ class ProfileResult(BaseModel):
     """Score against one heuristic ATS profile (not vendor-verified)."""
 
     id: str
+    kind: Literal["heuristic"] = "heuristic"
     score: int
     passes: bool
 
@@ -69,13 +70,17 @@ class ParseCheckReport(BaseModel):
     extractability: Extractability
     content_language: str
     overall_score: int | None
+    content_score: int | None
     checks: list[CheckResult]
     roundtrip: RoundtripResult | None = None
     profiles: list[ProfileResult]
     extracted_text_preview: str
 
 
-def overall_score(checks: list[CheckResult]) -> int:
+PARSEABILITY_CATEGORIES = frozenset({"extraction", "layout"})
+
+
+def _score(checks: list[CheckResult]) -> int:
     """Deduct a fixed penalty per failed check; any fatal failure caps the score."""
     failed = [check for check in checks if check.status == "fail"]
     score = 100 - sum(SEVERITY_PENALTIES[check.severity] for check in failed)
@@ -83,6 +88,24 @@ def overall_score(checks: list[CheckResult]) -> int:
     if any(check.severity == "fatal" for check in failed):
         score = min(score, FATAL_SCORE_CAP)
     return score
+
+
+def overall_score(checks: list[CheckResult]) -> int:
+    """Parseability score from extraction and layout checks only.
+
+    Content quality (contact details, headings, verbs) is reported separately
+    as ``content_score`` so a well-parsed but thin resume is not reported as
+    hard to parse.
+    """
+    return _score([check for check in checks if check.category in PARSEABILITY_CATEGORIES])
+
+
+def content_score(checks: list[CheckResult]) -> int | None:
+    """Content score from content checks; ``None`` when none of them applied."""
+    content = [check for check in checks if check.category == "content"]
+    if all(check.status == "not_applicable" for check in content):
+        return None
+    return _score(content)
 
 
 def report_to_json(report: ParseCheckReport) -> str:

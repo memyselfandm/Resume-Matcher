@@ -37,11 +37,14 @@ async def test_pdf_report_contract(client: AsyncClient) -> None:
         response = await client.post(URL, files=_file("two_column.pdf", PDF))
     assert response.status_code == 200
     body = response.json()
-    assert body["schema_version"] == "1.0"
+    assert body["schema_version"] == "2.0"
+    assert body["overall_score"] == 80  # multi_column (high) only; sidebar suppressed
+    assert body["content_score"] is not None
     assert body["file_format"] == "pdf"
     assert body["extractability"] == "full"
     assert body["roundtrip"] is None
     assert _checks(body)["multi_column"]["status"] == "fail"
+    assert {profile["kind"] for profile in body["profiles"]} == {"heuristic"}
     assert [profile["id"] for profile in body["profiles"]] == [
         "workday", "taleo", "successfactors", "icims", "greenhouse", "lever"
     ]
@@ -81,6 +84,7 @@ async def test_legacy_doc_reports_unsupported_format(client: AsyncClient) -> Non
     body = response.json()
     assert body["extractability"] == "unsupported_format"
     assert body["overall_score"] is None
+    assert body["content_score"] is None
 
 
 async def test_image_only_pdf_is_fatal(client: AsyncClient) -> None:
