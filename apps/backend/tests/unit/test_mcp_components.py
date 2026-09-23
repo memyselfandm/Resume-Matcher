@@ -12,12 +12,20 @@ import httpx
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-from app.instance_id import INSTANCE_ID_FILENAME, get_db_instance_id
+from app.instance_id import (
+    INSTANCE_ID_FILENAME,
+    database_established,
+    get_db_instance_id,
+)
 from app.mcp.bridge import (
     GENERIC_SERVER_ERROR,
     MAX_UPLOAD_BYTES,
+    UPLOAD_CONTENT_TYPES,
+    AppBridge,
+    InvalidIdentifierError,
     _error_message,
     check_upload_size,
+    path_segment,
     upload_content_type,
 )
 from app.mcp.formatting import resume_markdown, resume_summary
@@ -149,22 +157,55 @@ class TestTaskRegistry:
         settled = await registry.wait(record.task_id, 5)
         assert settled.status == "cancelled"
 
-    async def test_capacity_counts_running_tasks_only(self) -> None:
+    async def test_capacity_rejects_new_work_instead_of_dropping_unread_results(self) -> None:
         registry = TaskRegistry(max_tasks=1)
         release = asyncio.Event()
 
         async def blocked() -> dict[str, Any]:
             await release.wait()
-            return {}
+            return {"answer": 1}
 
         record = registry.start("blocked", blocked)
         with pytest.raises(TaskCapacityError):
             registry.start("second", blocked)
         release.set()
         await registry.wait(record.task_id, 5)
-        # A finished task yields its slot to new work.
-        again = registry.start("third", blocked)
+        # Finished but unread: the result is kept and new work is refused.
+        with pytest.raises(TaskCapacityError, match="unread results"):
+            registry.start("third", blocked)
+        assert registry.get(record.task_id).result == {"answer": 1}
+        # Once read, the slot is reusable.
+        registry.get(record.task_id).mark_delivered()
+        again = registry.start("fourth", blocked)
         assert registry.get(again.task_id) is not None
+        assert registry.get(record.task_id) is None
+        await registry.shutdown()
+
+    async def test_large_payload_released_after_delivery(self) -> None:
+        registry = TaskRegistry()
+
+        async def export() -> dict[str, Any]:
+            return {"bytes": 3, "content_base64": "UERG"}
+
+        record = registry.start("export", export)
+        await registry.wait(record.task_id, 5)
+        first = record.to_dict()
+        record.mark_delivered()
+        assert first["result"]["content_base64"] == "UERG"
+        assert record.to_dict()["result"] == {"bytes": 3, "payload_released": True}
+
+    async def test_running_task_is_never_marked_delivered(self) -> None:
+        registry = TaskRegistry()
+        release = asyncio.Event()
+
+        async def work() -> dict[str, Any]:
+            await release.wait()
+            return {}
+
+        record = registry.start("work", work)
+        record.mark_delivered()
+        assert record.delivered is False
+        release.set()
         await registry.shutdown()
 
     async def test_finished_tasks_expire_after_retention(self) -> None:
@@ -219,7 +260,45 @@ class TestBridgeErrors:
         assert _error_message(_response(409, text="")) == "Request failed with status 409."
 
 
+class TestPathSegments:
+    @pytest.mark.parametrize(
+        "value",
+        ["3f1c2a9e-6b1d-4c3e-9a57-0e2f8b6d4c11", "abc_DEF-123", "x" * 128],
+    )
+    def test_ids_accepted(self, value: str) -> None:
+        assert path_segment(value) == value
+
+    @pytest.mark.parametrize(
+        "value",
+        ["", "../applications/bulk", "..%2F", "a?b=1", "a#frag", "a/b", "a b", "x" * 129, ".."],
+    )
+    def test_unsafe_values_rejected(self, value: str) -> None:
+        with pytest.raises(InvalidIdentifierError, match="Invalid resume_id"):
+            path_segment(value, "resume_id")
+
+    async def test_bridge_refuses_unsafe_route_paths_without_dispatching(self) -> None:
+        dispatched: list[str] = []
+
+        async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+            dispatched.append(scope["path"])
+
+        bridge = AppBridge(app)
+        try:
+            for path in ("/resumes/../applications/bulk", "/resumes/x?y=1", "/resumes/", "resumes"):
+                with pytest.raises(InvalidIdentifierError):
+                    await bridge.request("GET", path)
+        finally:
+            await bridge.aclose()
+        assert dispatched == []
+
+
 class TestUploadGuards:
+    def test_extension_map_is_the_routers(self) -> None:
+        from app.routers import resumes
+
+        assert UPLOAD_CONTENT_TYPES is resumes.DOCUMENT_TYPES_BY_EXTENSION
+        assert MAX_UPLOAD_BYTES == resumes.MAX_FILE_SIZE == 4 * 1024 * 1024
+
     @pytest.mark.parametrize(
         ("filename", "content_type"),
         [
@@ -351,6 +430,27 @@ class TestInstanceId:
         replaced = get_db_instance_id(tmp_path)
         assert replaced != "not-a-uuid"
         assert get_db_instance_id(tmp_path) == replaced
+
+    def test_undecodable_file_is_replaced(self, tmp_path: Path) -> None:
+        (tmp_path / INSTANCE_ID_FILENAME).write_bytes(b"\xff\xfe\x00garbage")
+        replaced = get_db_instance_id(tmp_path)
+        assert (tmp_path / INSTANCE_ID_FILENAME).read_text() == replaced
+
+    def test_cached_after_first_read(self, tmp_path: Path) -> None:
+        first = get_db_instance_id(tmp_path)
+        (tmp_path / INSTANCE_ID_FILENAME).write_text("00000000-0000-4000-8000-000000000000")
+        assert get_db_instance_id(tmp_path) == first
+
+    def test_without_create_missing_id_is_none(self, tmp_path: Path) -> None:
+        assert get_db_instance_id(tmp_path, create=False) is None
+        assert not (tmp_path / INSTANCE_ID_FILENAME).exists()
+        created = get_db_instance_id(tmp_path)
+        assert get_db_instance_id(tmp_path, create=False) == created
+
+    def test_database_established_tracks_sqlite_file(self, tmp_path: Path) -> None:
+        assert database_established(tmp_path) is False
+        (tmp_path / "resume_matcher.db").write_bytes(b"")
+        assert database_established(tmp_path) is True
 
     def test_defaults_to_settings_data_dir(self) -> None:
         from app.config import settings
