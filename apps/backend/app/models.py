@@ -23,6 +23,13 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# ISO-8601 timestamp strings are ordered and compared lexically (byte order).
+# SQLite compares TEXT bytewise; PostgreSQL would use the database's linguistic
+# collation (which ignores punctuation such as ``.`` and ``+``), so the
+# PostgreSQL variant pins the byte-order "C" collation.
+IsoTimestamp = String().with_variant(String(collation="C"), "postgresql")
+
+
 class Base(DeclarativeBase):
     """Declarative base shared by every table."""
 
@@ -52,16 +59,19 @@ class Resume(Base):
     # omitted entirely when None. The facade reproduces that by only emitting
     # the key when this column is non-null.
     original_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[str] = mapped_column(String, default=_utcnow_iso)
-    updated_at: Mapped[str] = mapped_column(String, default=_utcnow_iso)
+    created_at: Mapped[str] = mapped_column(IsoTimestamp, default=_utcnow_iso)
+    updated_at: Mapped[str] = mapped_column(IsoTimestamp, default=_utcnow_iso)
 
     __table_args__ = (
         # Many masters (career tracks) may exist; at most one is the default.
+        # The facade serializes default changes with the global writer
+        # reservation.
         Index(
             "ux_resumes_single_default_master",
             "is_default_master",
             unique=True,
             sqlite_where=text("is_default_master = 1"),
+            postgresql_where=text("is_default_master"),
         ),
     )
 
@@ -81,7 +91,7 @@ class Job(Base):
     job_id: Mapped[str] = mapped_column(String, primary_key=True)
     content: Mapped[str] = mapped_column(Text)
     resume_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[str] = mapped_column(String, default=_utcnow_iso)
+    created_at: Mapped[str] = mapped_column(IsoTimestamp, default=_utcnow_iso)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
@@ -95,7 +105,7 @@ class Improvement(Base):
     tailored_resume_id: Mapped[str] = mapped_column(String, index=True)
     job_id: Mapped[str] = mapped_column(String)
     improvements: Mapped[list] = mapped_column(JSON, default=list)
-    created_at: Mapped[str] = mapped_column(String, default=_utcnow_iso)
+    created_at: Mapped[str] = mapped_column(IsoTimestamp, default=_utcnow_iso)
 
 
 class TailoringPreview(Base):
@@ -114,13 +124,13 @@ class TailoringPreview(Base):
     payload_hash: Mapped[str] = mapped_column(String)
     source_hash: Mapped[str] = mapped_column(String)
     job_hash: Mapped[str] = mapped_column(String)
-    created_at: Mapped[str] = mapped_column(String)
-    expires_at: Mapped[str] = mapped_column(String, index=True)
+    created_at: Mapped[str] = mapped_column(IsoTimestamp)
+    expires_at: Mapped[str] = mapped_column(IsoTimestamp, index=True)
     result_resume_id: Mapped[str | None] = mapped_column(
         String, nullable=True, index=True
     )
     claim_token: Mapped[str | None] = mapped_column(String, nullable=True)
-    claim_expires_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    claim_expires_at: Mapped[str | None] = mapped_column(IsoTimestamp, nullable=True)
     response_data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
@@ -143,11 +153,11 @@ class Application(Base):
     status: Mapped[str] = mapped_column(String, default="applied", index=True)
     company: Mapped[str | None] = mapped_column(String, nullable=True)
     role: Mapped[str | None] = mapped_column(String, nullable=True)
-    applied_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    applied_at: Mapped[str | None] = mapped_column(IsoTimestamp, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     position: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[str] = mapped_column(String, default=_utcnow_iso)
-    updated_at: Mapped[str] = mapped_column(String, default=_utcnow_iso)
+    created_at: Mapped[str] = mapped_column(IsoTimestamp, default=_utcnow_iso)
+    updated_at: Mapped[str] = mapped_column(IsoTimestamp, default=_utcnow_iso)
 
 
 class ApiKey(Base):
@@ -162,4 +172,4 @@ class ApiKey(Base):
 
     provider: Mapped[str] = mapped_column(String, primary_key=True)
     ciphertext: Mapped[str] = mapped_column(Text)
-    updated_at: Mapped[str] = mapped_column(String, default=_utcnow_iso)
+    updated_at: Mapped[str] = mapped_column(IsoTimestamp, default=_utcnow_iso)

@@ -31,6 +31,10 @@ dev = [
     "httpx>=0.28.0",
     "respx>=0.21.1",
 ]
+postgres = [
+    # Optional PostgreSQL backend (DATABASE_URL=postgresql+psycopg://...).
+    "psycopg[binary]==3.3.6",
+]
 e2e-monitor = [
     "pypdf>=4.0.0",  # PDF text probe for the non-blank render check
     "httpx>=0.28.0",
@@ -63,4 +67,6 @@ markers = [
     "service: service layer tests with mocked LLM",
     "integration: API endpoint tests with httpx AsyncClient",
     "eval: prompt-quality evaluations; may call a real LLM, skipped without a configured key",
+    "sqlite_only: exercises SQLite driver behavior (PRAGMA, BEGIN IMMEDIATE, sqlite3 error codes); skipped when TEST_DATABASE_URL targets PostgreSQL",
+    "postgres_only: requires TEST_DATABASE_URL pointing at PostgreSQL; skipped otherwise",
 ]
