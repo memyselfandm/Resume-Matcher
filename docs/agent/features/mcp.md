@@ -60,14 +60,15 @@ frontend's `/print/resumes/{id}` page. That page fetches the resume
 3. Chromium installed (`uv run playwright install chromium`).
 
 `get_status` checks this: it compares the local `db_instance_id` (a UUID stored
-in `DATA_DIR/instance_id`) with the one `GET /api/v1/health` reports at the
-print page's data origin.
+in `DATA_DIR/instance_id`, minted once the directory holds a database) with the
+one `GET /api/v1/health` reports at the print page's data origin (`null` while
+that backend's directory has no database yet).
 
 | `render_path_ok` | Meaning |
 |---|---|
-| `true` | The backend serving the print page uses this database. |
-| `false` | No backend answered at the data origin, or it uses a different data directory. |
-| `"unknown"` | The backend does not report `db_instance_id` (older version), or no resumes are stored yet. |
+| `true` | Both ids exist and match: the backend serving the print page uses this database. |
+| `false` | No backend answered at the data origin; the ids differ; or only one side has a database. |
+| `"unknown"` | The backend does not report `db_instance_id` (older version), or neither side has a database yet. |
 
 `pdf_export_ready` is `true` only when the frontend is reachable and
 `render_path_ok` is `true`.
@@ -83,7 +84,10 @@ reach a running MCP server. Restart the MCP server to pick it up immediately.
 
 Results are JSON objects, summary first; IDs are always returned. Errors come
 back as `isError: true` with the router's client-safe message (never a
-traceback).
+traceback; unhandled router exceptions are logged server-side by the bridge).
+Every id placed in a route path must match `[A-Za-z0-9_-]{1,128}` (ids are
+UUIDs); anything else is rejected before a request is made, and the bridge also
+refuses any route path that is not made of such segments.
 
 | Tool | Backing route | Notes |
 |---|---|---|
@@ -96,7 +100,7 @@ traceback).
 | `add_jobs(descriptions[], resume_id?)` | `POST /jobs/upload` | Returns `job_ids`. |
 | `get_job(job_id, full)` | `GET /jobs/{id}` | Preview of the text unless `full=true`. |
 | `tailor_resume_preview(resume_id, job_id, prompt_id?, wait_seconds?)` | `POST /resumes/improve/preview` | Long op. Returns `preview_id`, `summary_of_changes`, `keyword_score`. |
-| `tailor_resume_confirm(preview_id)` | `POST /resumes/improve/confirm` | Returns `tailored_resume_id`, `application_id`. |
+| `tailor_resume_confirm(preview_id, wait_seconds?)` | `POST /resumes/improve/confirm` | Long op. Returns `tailored_resume_id`, `application_id`. Idempotent: a retry returns the same result. |
 | `generate_cover_letter(resume_id, wait_seconds?)` | `POST /resumes/{id}/generate-cover-letter` | Long op; tailored resumes only. |
 | `generate_outreach(resume_id, wait_seconds?)` | `POST /resumes/{id}/generate-outreach` | Long op; tailored resumes only. |
 | `generate_interview_prep(resume_id, wait_seconds?)` | `POST /resumes/{id}/generate-interview-prep` | Long op; tailored resumes only. |
@@ -127,11 +131,19 @@ resume and job content change. Handshake-era responses omit these fields.
 the backend does not persist. `tailor_resume_preview` keeps it in the MCP
 process (`previews.py`, LRU of 64, expiring with the preview's
 `preview_expires_at`) under its `preview_id`. A restart, eviction or expiry
-makes `tailor_resume_confirm` fail with "run tailor_resume_preview again". A
-successful confirm consumes the handle.
+makes `tailor_resume_confirm` fail with "run tailor_resume_preview again". The
+handle stays valid after a successful confirm, so retrying (for example after
+a lost response) replays the router's stored confirmation: same tailored
+resume, same single tracker card.
 
 **Tasks.** Long operations run in an in-memory task registry (`tasks.py`,
-at most 32 running, finished results kept one hour, cancelled on shutdown).
+cancelled on shutdown). It holds at most 32 tasks, counting running ones and
+finished results the client has not read yet; unread results are kept for one
+hour and are never dropped early, so when every slot is taken new work is
+refused with a "retry" error. Results that were already returned free their
+slot. A PDF's `content_base64` is returned once (inline or by the first
+`get_task` that sees the result) and then released; later reads show
+`payload_released: true`, so call `export_resume_pdf` again if it is needed.
 Each long tool waits up to `wait_seconds` (stdio default 200 s, maximum
 1800 s) and then returns either the result with `status: "succeeded"` and a
 `task_id`, or `{"status": "running", "task_id": ...}`. Poll `get_task` until
