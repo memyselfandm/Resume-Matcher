@@ -113,3 +113,27 @@ def test_html_bullets_match_plain_extracted_text() -> None:
     result = compute_roundtrip(source, text)
     assert {field.status for field in result.fields} == {"found"}
     assert result.content_recall == 1.0
+
+
+def test_swapped_dates_between_entries_are_flagged(
+    source: dict[str, Any], rendered_text: str
+) -> None:
+    """Each entry's date must appear inside that entry, not anywhere in the text."""
+    first, second = "Jan 2021 - Present", "Jun 2017 - Dec 2020"
+    assert first in rendered_text and second in rendered_text
+    swapped = (
+        rendered_text.replace(first, "\x00").replace(second, first).replace("\x00", second)
+    )
+    result = compute_roundtrip(source, swapped)
+    flagged = {field.field: field.status for field in result.fields if field.status != "found"}
+    assert set(flagged) == {"workExperience[0].years", "workExperience[1].years"}
+    assert set(flagged.values()) <= {"missing", "garbled"}
+    assert result.content_recall < 0.97
+
+
+def test_substring_titles_anchor_to_their_own_entry(source: dict[str, Any], rendered_text: str) -> None:
+    """'Software Engineer' must not anchor inside 'Senior Software Engineer'."""
+    result = compute_roundtrip(source, rendered_text)
+    statuses = _statuses(result)
+    assert statuses["workExperience[1].title"] == "found"
+    assert statuses["workExperience[1].years"] == "found"

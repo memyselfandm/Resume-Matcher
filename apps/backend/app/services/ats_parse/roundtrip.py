@@ -27,6 +27,8 @@ FOUND_MIN_RATIO = 0.9
 GARBLED_MIN_RATIO = 0.5
 SHORT_FIELD_MAX_TOKENS = 2
 WINDOW_SLACK_TOKENS = 2
+# Templates may print an entry's date or location just before its title.
+ENTRY_BACK_SLACK_TOKENS = 8
 
 DEFAULT_SECTION_ORDER = (
     "summary",
@@ -47,15 +49,22 @@ class ExpectedField:
     kind: str
     value: str
     hidden: bool
+    entry: str | None = None
+    anchor: bool = False
 
 
 def _text(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
+# Fields that identify an entry; they anchor where the entry sits in the text.
+_IDENTITY_FIELDS = frozenset({"title", "company", "degree", "institution", "name", "role", "subtitle"})
+
+
 def _entry_fields(
     section: str, index: int, entry: dict[str, Any], names: tuple[str, ...], hidden: bool
 ) -> list[ExpectedField]:
+    entry_id = f"{section}[{index}]"
     fields: list[ExpectedField] = []
     for name in names:
         value = entry.get(name)
@@ -63,15 +72,23 @@ def _entry_fields(
             for position, item in enumerate(value):
                 fields.append(
                     ExpectedField(
-                        f"{section}[{index}].{name}[{position}]",
+                        f"{entry_id}.{name}[{position}]",
                         f"{section}.{name}",
                         _text(item),
                         hidden,
+                        entry=entry_id,
                     )
                 )
         else:
             fields.append(
-                ExpectedField(f"{section}[{index}].{name}", f"{section}.{name}", _text(value), hidden)
+                ExpectedField(
+                    f"{entry_id}.{name}",
+                    f"{section}.{name}",
+                    _text(value),
+                    hidden,
+                    entry=entry_id,
+                    anchor=name in _IDENTITY_FIELDS,
+                )
             )
     return fields
 
@@ -179,13 +196,61 @@ def _best_window(needle: list[str], haystack: list[str]) -> tuple[float, int]:
     return best / len(needle), best_start
 
 
-def _locate(needle: list[str], haystack: list[str], joined: str) -> tuple[float, int]:
-    """Exact contiguous match first; otherwise the best fuzzy window."""
+def _locate(
+    needle: list[str], haystack: list[str], start: int = 0, end: int | None = None
+) -> tuple[float, int]:
+    """Exact contiguous match first, else the best fuzzy window, within [start, end)."""
+    window = haystack[start:end]
+    joined = " " + " ".join(window) + " "
     target = " " + " ".join(needle) + " "
     offset = joined.find(target)
     if offset >= 0:
-        return 1.0, joined.count(" ", 0, offset)
-    return _best_window(needle, haystack)
+        return 1.0, start + joined.count(" ", 0, offset)
+    ratio, position = _best_window(needle, window)
+    return ratio, position + start if position >= 0 else -1
+
+
+def _anchor_entries(
+    fields: list[ExpectedField], haystack: list[str]
+) -> dict[str, tuple[int, int]]:
+    """Locate each entry by its identity fields, in expected order.
+
+    Each entry is searched for after the previous entry's anchor, so a title
+    that is a substring of an earlier one ("Software Engineer" inside "Senior
+    Software Engineer") resolves to its own occurrence. Returns entry id ->
+    (anchor start, anchor end) token positions.
+    """
+    anchors: dict[str, tuple[int, int]] = {}
+    cursor = 0
+    order = list(dict.fromkeys(field.entry for field in fields if field.entry))
+    for entry in order:
+        best: tuple[int, int] | None = None
+        for field in fields:
+            if field.entry != entry or not field.anchor or field.hidden:
+                continue
+            needle = tokenize(normalize_text(field.value, source_html=True))
+            if not needle:
+                continue
+            ratio, position = _locate(needle, haystack, cursor)
+            if ratio == 1.0 and (best is None or position < best[0]):
+                best = (position, position + len(needle))
+        if best is not None:
+            anchors[entry] = best
+            cursor = best[1]
+    return anchors
+
+
+def _entry_spans(
+    fields: list[ExpectedField], anchors: dict[str, tuple[int, int]], length: int
+) -> dict[str, tuple[int, int]]:
+    """Token span of each anchored entry: shortly before its anchor to the next one."""
+    order = [entry for entry in dict.fromkeys(f.entry for f in fields if f.entry) if entry in anchors]
+    spans: dict[str, tuple[int, int]] = {}
+    for index, entry in enumerate(order):
+        start = anchors[entry][0]
+        following = [anchors[other][0] for other in order[index + 1 :] if anchors[other][0] > start]
+        spans[entry] = (max(0, start - ENTRY_BACK_SLACK_TOKENS), min(following, default=length))
+    return spans
 
 
 def _kendall_fidelity(positions: list[int]) -> float:
@@ -218,11 +283,13 @@ def compute_roundtrip(
             ``None`` means every field is expected.
     """
     haystack = tokenize(normalize_text(extracted_text))
-    joined = " " + " ".join(haystack) + " "
+    fields = expected_fields(source)
+    anchors = _anchor_entries(fields, haystack)
+    spans = _entry_spans(fields, anchors, len(haystack))
     results: list[RoundtripField] = []
     positions: list[int] = []
     found = considered = 0
-    for field in expected_fields(source):
+    for field in fields:
         status: FieldStatus
         if field.hidden:
             results.append(RoundtripField(field=field.path, status="hidden", score=0.0))
@@ -233,7 +300,14 @@ def compute_roundtrip(
         needle = tokenize(normalize_text(field.value, source_html=True))
         if not needle:
             continue
-        ratio, position = _locate(needle, haystack, joined)
+        if field.entry in spans and not field.anchor:
+            # Dates, locations, and bullets must appear inside their own entry,
+            # so values swapped between entries are not reported as found.
+            ratio, position = _locate(needle, haystack, *spans[field.entry])
+        elif field.anchor and field.entry in anchors:
+            ratio, position = _locate(needle, haystack, anchors[field.entry][0])
+        else:
+            ratio, position = _locate(needle, haystack)
         found_threshold = 1.0 if len(needle) <= SHORT_FIELD_MAX_TOKENS else FOUND_MIN_RATIO
         if ratio >= found_threshold:
             status = "found"
