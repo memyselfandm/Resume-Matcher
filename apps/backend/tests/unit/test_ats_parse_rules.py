@@ -1,18 +1,28 @@
 """Unit tests for parse-check rules on synthetic inputs (no fixture files)."""
 
+import io
 import itertools
+import time
 
 import pytest
+from docx import Document
 
+from app.services.ats_parse import check_document_sync
 from app.services.ats_parse.content_checks import (
     detect_content_language,
+    has_email,
+    has_phone,
     find_section_headings,
     run_content_checks,
 )
+from app.services.ats_parse.engine import build_report
 from app.services.ats_parse.extract import (
+    MAX_EXTRACTED_CHARS,
+    DocxFeatures,
     ExtractedDocument,
     PageLayout,
     TextLine,
+    extract_document,
     reconstruct_rows,
 )
 from app.services.ats_parse.layout_checks import find_gutters, run_layout_checks
@@ -221,3 +231,76 @@ def test_stopword_detection_distinguishes_latin_languages(a: str, b: str) -> Non
     }
     assert detect_content_language(samples[a] * 3) == a
     assert detect_content_language(samples[b] * 3) == b
+
+
+class TestContactPatterns:
+    @pytest.mark.parametrize(
+        "text",
+        ["(555) 010-4477", "+34 555 010 223", "+86 555 0100 2233", "555.010.4477"],
+    )
+    def test_phone_numbers_are_detected(self, text: str) -> None:
+        assert has_phone(f"Call {text} today")
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "2019 - 2023",
+            "Jan 2020 - 03/2022",
+            "Mentor 2015 - 2019 2019 - 2021",
+            "(2011 - 2015)",
+            "555-0100",
+        ],
+    )
+    def test_year_ranges_and_short_numbers_are_not_phones(self, text: str) -> None:
+        assert not has_phone(text)
+
+    def test_email_pattern_matches_fixture_addresses(self) -> None:
+        for address in ("jordan.rivera@example.com", "jose.nunez@example.com", "a+b@mail.co.uk"):
+            assert has_email(f"Contact: {address}.")
+        assert not has_email("name at example dot com")
+
+
+class TestLinearTime:
+    """Every regex runs on up to 200k untrusted characters; none may backtrack."""
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "a" * 200_000,
+            "1" * 200_000,
+            "1,000" * 40_000,
+            "2019 - " * 28_000,
+            "jan " + " " * 199_996,
+            "(cid:1" * 33_000,
+        ],
+    )
+    def test_full_check_path_is_fast_on_hostile_text(self, payload: str) -> None:
+        document = ExtractedDocument(
+            file_format="docx",
+            text=payload,
+            docx=DocxFeatures(
+                table_count=0,
+                text_box_text=payload,
+                header_footer_text=payload,
+                inline_image_count=0,
+                max_section_columns=1,
+            ),
+        )
+        started = time.perf_counter()
+        build_report(document)
+        assert time.perf_counter() - started < 1.0
+
+    def test_docx_with_huge_header_is_capped_and_fast(self) -> None:
+        document = Document()
+        document.sections[0].header.paragraphs[0].text = "a" * 40_000 + " " + "b" * 200_000
+        document.add_paragraph("Experience")
+        stream = io.BytesIO()
+        document.save(stream)
+        started = time.perf_counter()
+        report = check_document_sync(stream.getvalue(), "header.docx")
+        assert time.perf_counter() - started < 2.0
+        truncated = next(check for check in report.checks if check.id == "truncated")
+        assert truncated.status == "fail"
+        extracted = extract_document(stream.getvalue(), "header.docx")
+        assert extracted.docx is not None
+        assert len(extracted.docx.header_footer_text) == MAX_EXTRACTED_CHARS

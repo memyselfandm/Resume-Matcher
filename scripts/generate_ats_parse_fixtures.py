@@ -2,8 +2,10 @@
 
 Run from ``apps/backend`` so the backend's dependencies are available::
 
-    uv run python ../../scripts/generate_ats_parse_fixtures.py
+    uv run python ../../scripts/generate_ats_parse_fixtures.py [fixture names...]
 
+With fixture names, only those files are rewritten (Chromium is launched only
+when a selected fixture needs it).
 Set ``CHROMIUM_EXECUTABLE`` to reuse a locally installed Chromium binary.
 
 Layout fixtures are rendered from small synthetic HTML documents with headless
@@ -23,13 +25,14 @@ import base64
 import io
 import json
 import os
+import sys
 import zlib
 from collections.abc import Callable
 from pathlib import Path
 
 from docx import Document
 from docx.enum.section import WD_SECTION
-from docx.oxml import OxmlElement
+from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import qn
 from playwright.sync_api import Page, sync_playwright
 
@@ -484,11 +487,39 @@ def clean_docx(document: Document) -> None:
 
 
 def contact_in_header_docx(document: Document) -> None:
-    """Contact details exist only in the page header."""
+    """Contact details exist only in the page header; the body has year ranges.
+
+    Year ranges share a phone number's shape, so the body deliberately holds
+    them to prove a header-only phone is still reported.
+    """
     header = document.sections[0].header
     header.paragraphs[0].text = f"{NAME} | {EMAIL} | {PHONE} | {LINKEDIN}"
     document.add_heading("Professional Profile", level=1)
     _add_body(document)
+    document.add_heading("Volunteering", level=2)
+    document.add_paragraph("Mentor, Harbor Code Club 2015 - 2019 2019 - 2021")
+
+
+TEXT_BOX_TEXT = "Certified Kubernetes Administrator, 2022"
+_TEXT_BOX_RUN = """<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+ xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+ xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+ xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+ xmlns:v="urn:schemas-microsoft-com:vml"><mc:AlternateContent><mc:Choice Requires="wps">
+<w:drawing><wp:inline><wp:extent cx="2743200" cy="457200"/><wp:docPr id="1" name="Box"/>
+<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+<wps:wsp><wps:txbx><w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:txbxContent>
+</wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>
+<mc:Fallback><w:pict><v:shape><v:textbox><w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p>
+</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r>"""
+
+
+def text_box_docx(document: Document) -> None:
+    """Clean body plus one Word text box (DrawingML choice with a VML fallback)."""
+    clean_docx(document)
+    paragraph = document.add_paragraph()
+    paragraph._p.append(parse_xml(_TEXT_BOX_RUN.format(text=TEXT_BOX_TEXT)))
 
 
 def table_layout_docx(document: Document) -> None:
@@ -520,7 +551,26 @@ def two_column_section_docx(document: Document) -> None:
     clean_docx(document)
 
 
-def main() -> None:
+def _render_browser_fixtures(
+    html_fixtures: dict[str, Callable[[], str]], selected: set[str]
+) -> dict[str, bytes]:
+    """Render the Chromium-backed fixtures (HTML pages and the image-only PDF)."""
+    outputs: dict[str, bytes] = {}
+    with sync_playwright() as playwright:
+        # CHROMIUM_EXECUTABLE lets a machine reuse an already-installed build.
+        executable = os.environ.get("CHROMIUM_EXECUTABLE") or None
+        browser = playwright.chromium.launch(executable_path=executable)
+        page = browser.new_page()
+        for name, build in html_fixtures.items():
+            outputs[name] = _render_pdf(page, build())
+        if not selected or "image_only.pdf" in selected:
+            outputs["image_only.pdf"] = _image_only_pdf(page)
+        browser.close()
+    return outputs
+
+
+def main(selected: set[str]) -> None:
+    """Write every fixture, or only the named ones when names are given."""
     FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
     outputs: dict[str, bytes] = {
         "icon_font.pdf": icon_font_pdf(),
@@ -531,6 +581,7 @@ def main() -> None:
         "contact_in_header.docx": _docx_bytes(contact_in_header_docx),
         "table_layout.docx": _docx_bytes(table_layout_docx),
         "two_column_section.docx": _docx_bytes(two_column_section_docx),
+        "text_box.docx": _docx_bytes(text_box_docx),
         "swiss_single_like.source.json": (
             json.dumps(swiss_single_source(), indent=2, sort_keys=True) + "\n"
         ).encode("utf-8"),
@@ -543,19 +594,19 @@ def main() -> None:
         "spanish.pdf": spanish_html,
         "twelve_pages.pdf": long_document_html,
     }
-    with sync_playwright() as playwright:
-        # CHROMIUM_EXECUTABLE lets a machine reuse an already-installed build.
-        executable = os.environ.get("CHROMIUM_EXECUTABLE") or None
-        browser = playwright.chromium.launch(executable_path=executable)
-        page = browser.new_page()
-        for name, build in html_fixtures.items():
-            outputs[name] = _render_pdf(page, build())
-        outputs["image_only.pdf"] = _image_only_pdf(page)
-        browser.close()
+    html_fixtures = {
+        name: build
+        for name, build in html_fixtures.items()
+        if not selected or name in selected
+    }
+    if html_fixtures or not selected or "image_only.pdf" in selected:
+        outputs.update(_render_browser_fixtures(html_fixtures, selected))
     for name, data in sorted(outputs.items()):
+        if selected and name not in selected:
+            continue
         (FIXTURE_DIR / name).write_bytes(data)
         print(f"wrote {name} ({len(data)} bytes)")
 
 
 if __name__ == "__main__":
-    main()
+    main(set(sys.argv[1:]))

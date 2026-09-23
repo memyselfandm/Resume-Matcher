@@ -36,7 +36,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.services.ats_parse.content_checks import EMAIL_RE, PHONE_RE
+from app.services.ats_parse.content_checks import has_email, has_phone
 from app.services.ats_parse.extract import (
     MAX_ANALYZED_PAGES,
     MAX_EXTRACTED_CHARS,
@@ -64,7 +64,7 @@ MAX_RECOMMENDED_PAGES = 2
 REPLACEMENT_MAX_RATIO = 0.01
 EVIDENCE_SAMPLE_SIZE = 5
 
-_CID_RE = re.compile(r"\(cid:(\d+)\)")
+_CID_RE = re.compile(r"\(cid:(\d{1,6})\)")
 _REPLACEMENT_OR_CONTROL_RE = re.compile(r"[\ufffd\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
@@ -420,8 +420,8 @@ def _header_footer_contact(document: ExtractedDocument) -> CheckResult:
     header = document.docx.header_footer_text
     fields = [
         name
-        for name, pattern in (("email", EMAIL_RE), ("phone", PHONE_RE))
-        if pattern.search(header) and not pattern.search(document.text)
+        for name, detect in (("email", has_email), ("phone", has_phone))
+        if detect(header) and not detect(document.text)
     ]
     return CheckResult(
         id="header_footer_contact",
