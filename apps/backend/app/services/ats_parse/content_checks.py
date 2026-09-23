@@ -30,14 +30,24 @@ from app.services.ats_parse.report import CheckResult
 SUPPORTED_CONTENT_LANGUAGES = ("en", "es", "fr", "pt", "de", "ja", "ko", "zh")
 UNKNOWN_LANGUAGE = "unknown"
 
-EMAIL_RE = re.compile(r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}", re.IGNORECASE)
-PHONE_RE = re.compile(r"\+?\d[\d\s().\-]{7,}\d")
-LINKEDIN_RE = re.compile(r"linkedin\.com/(?:in|pub)/[\w\-%.]+", re.IGNORECASE)
+# Every pattern below runs on untrusted extracted text of up to 200k chars,
+# so each is linear: quantifiers are bounded and matches are anchored with
+# lookbehinds instead of relying on backtracking from every position.
+EMAIL_RE = re.compile(
+    r"(?<![a-z0-9._%+\-])[a-z0-9._%+\-]{1,64}@[a-z0-9\-]{1,63}"
+    r"(?:\.[a-z0-9\-]{1,63}){0,8}\.[a-z]{2,24}",
+    re.IGNORECASE,
+)
+_PHONE_CANDIDATE_RE = re.compile(r"(?<![\d+])\+?\d[\d \t().\-]{6,22}\d(?!\d)")
+_DIGIT_GROUP_RE = re.compile(r"\d{1,15}")
+PHONE_MIN_DIGITS = 10
+PHONE_MAX_DIGITS = 15
+LINKEDIN_RE = re.compile(r"linkedin\.com/(?:in|pub)/[\w\-%.]{1,100}", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 _MONTH_YEAR_RE = re.compile(
     r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?"
     r"|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-    r"\.?\s+(?:19|20)\d{2}\b"
+    r"\.?\s{1,3}(?:19|20)\d{2}\b"
     r"|\b(?:0?[1-9]|1[0-2])/(?:19|20)\d{2}\b",
     re.IGNORECASE,
 )
@@ -66,11 +76,11 @@ ACTION_VERB_MIN_DISTINCT = 8
 
 # Language-neutral quantification patterns (ats-screener experience-scorer.ts).
 _QUANTIFICATION_PATTERNS = (
-    re.compile(r"\d+\s?%"),
+    re.compile(r"(?<!\d)\d{1,12}\s?%"),
     re.compile(r"[$€£¥]\s?\d"),
-    re.compile(r"\b\d+(?:\.\d+)?\s?[x×]\b", re.IGNORECASE),
-    re.compile(r"\b\d{1,3}(?:[,.]\d{3})+\b"),
-    re.compile(r"\b\d+\+"),
+    re.compile(r"(?<![\d.])\d{1,12}(?:\.\d{1,6})?\s?[x×]\b", re.IGNORECASE),
+    re.compile(r"(?<![\d,.])\d{1,3}(?:[,.]\d{3}){1,6}(?![\d,.]\d)"),
+    re.compile(r"(?<!\d)\d{1,12}\+"),
 )
 QUANTIFIED_MIN_LINES = 3
 
@@ -172,6 +182,29 @@ DETECTION_MIN_TOKENS = 30
 DETECTION_MIN_RATIO = 0.03
 DETECTION_MIN_MARGIN = 1.5
 CJK_MIN_RATIO = 0.3
+
+
+def has_phone(text: str) -> bool:
+    """Whether text contains a phone number (10-15 digits, not a year range).
+
+    Year ranges such as "2019 - 2023" or "2015 - 2019 2019 - 2021" have the
+    same shape as a phone number, so a candidate whose digit groups are all
+    years is rejected.
+    """
+    for match in _PHONE_CANDIDATE_RE.finditer(text):
+        groups = _DIGIT_GROUP_RE.findall(match.group(0))
+        digits = sum(len(group) for group in groups)
+        if not PHONE_MIN_DIGITS <= digits <= PHONE_MAX_DIGITS:
+            continue
+        if all(len(group) == 4 and group[:2] in ("19", "20") for group in groups):
+            continue
+        return True
+    return False
+
+
+def has_email(text: str) -> bool:
+    """Whether text contains an email address."""
+    return EMAIL_RE.search(text) is not None
 
 
 def detect_content_language(text: str) -> str:
@@ -280,17 +313,17 @@ def run_content_checks(
     normalized = normalize_text(text)
     tokens = tokenize(normalized)
     checks: list[CheckResult] = []
-    for check_id, severity, pattern in (
-        ("contact_email", "high", EMAIL_RE),
-        ("contact_phone", "medium", PHONE_RE),
-        ("contact_linkedin", "low", LINKEDIN_RE),
+    for check_id, severity, found_contact in (
+        ("contact_email", "high", has_email(text)),
+        ("contact_phone", "medium", has_phone(text)),
+        ("contact_linkedin", "low", LINKEDIN_RE.search(text) is not None),
     ):
         checks.append(
             CheckResult(
                 id=check_id,
                 category="content",
                 severity=severity,  # type: ignore[arg-type]
-                status="pass" if pattern.search(text) else "fail",
+                status="pass" if found_contact else "fail",
             )
         )
 
@@ -387,7 +420,7 @@ def run_content_checks(
 def detected_sections(text: str, render_locale: str | None = None) -> list[str]:
     """Canonical section names present, including contact (email or phone found)."""
     sections = list(find_section_headings(text, render_locale))
-    if EMAIL_RE.search(text) or PHONE_RE.search(text):
+    if has_email(text) or has_phone(text):
         sections.insert(0, "contact")
     return sections
 

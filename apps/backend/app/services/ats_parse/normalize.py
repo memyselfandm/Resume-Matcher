@@ -23,14 +23,13 @@ _QUOTES = {
 _BULLETS = dict.fromkeys(map(ord, "\u2022\u2023\u2043\u25aa\u25cf\u25e6\u00b7\u25a0"), " ")
 _TRANSLATION = {**_DASHES, **_QUOTES, **_BULLETS, 0x00A0: " ", 0x00AD: None}
 
-_HTML_TAG_RE = re.compile(r"<[^>]{0,500}>")
+_HTML_TAG_RE = re.compile(r"<[^<>]{0,500}>")
 # A word broken across lines by a hyphen: "develop-\nment" -> "development".
 _LINE_WRAP_HYPHEN_RE = re.compile(r"(\w)-\n(\w)")
 _WHITESPACE_RE = re.compile(r"\s+")
 _TOKEN_RE = re.compile(r"[^\W_]+(?:[.+#'][^\W_]+)*[+#]*", re.UNICODE)
 # URLs and emails stay single tokens so a slug such as ".../jordan-rivera"
 # never counts as the name "Jordan Rivera".
-_LINK_RE = re.compile(r"\S*[/@]\S*")
 _URL_PREFIX_RE = re.compile(r"^(?:https?://)?(?:www\.)?")
 
 
@@ -64,7 +63,7 @@ def tokenize(value: str) -> list[str]:
     """Split normalized text into word tokens (keeps c++, node.js, URLs, emails)."""
     tokens: list[str] = []
     for chunk in value.split():
-        if _LINK_RE.fullmatch(chunk) and any(char.isalnum() for char in chunk):
+        if ("/" in chunk or "@" in chunk) and any(char.isalnum() for char in chunk):
             link = _link_token(chunk)
             if "/" in link or "@" in link:
                 tokens.append(link)

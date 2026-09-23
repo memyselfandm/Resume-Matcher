@@ -242,6 +242,9 @@ _TEXT_BOX_TAG = f"{{{_WORD_NS}}}txbxContent"
 _TEXT_TAG = f"{{{_WORD_NS}}}t"
 _BREAK_TAGS = frozenset({f"{{{_WORD_NS}}}br", f"{{{_WORD_NS}}}cr"})
 _TAB_TAG = f"{{{_WORD_NS}}}tab"
+_MC_FALLBACK_TAG = (
+    "{http://schemas.openxmlformats.org/markup-compatibility/2006}Fallback"
+)
 
 
 def _run_text(paragraph: Any, *, skip_text_boxes: bool) -> str:
@@ -304,6 +307,10 @@ def _extract_docx(content: bytes) -> ExtractedDocument:
     body_lines = _body_texts(body)
     text_box_lines: list[str] = []
     for text_box in body.iter(_TEXT_BOX_TAG):
+        # Word stores each text box twice: DrawingML in mc:Choice and a VML
+        # copy in mc:Fallback. Count the content once.
+        if any(ancestor.tag == _MC_FALLBACK_TAG for ancestor in text_box.iterancestors()):
+            continue
         text_box_lines.extend(_paragraph_texts(text_box))
 
     header_footer_lines: list[str] = []
@@ -325,16 +332,22 @@ def _extract_docx(content: bytes) -> ExtractedDocument:
             if raw is not None and raw.isdigit():
                 max_columns = max(max_columns, int(raw))
 
+    # Every text field feeds regex checks, so each is capped independently.
     text = "\n".join(body_lines)
-    truncated = len(text) > MAX_EXTRACTED_CHARS
+    text_box_text = "\n".join(text_box_lines)
+    header_footer_text = "\n".join(dict.fromkeys(header_footer_lines))
+    truncated = any(
+        len(value) > MAX_EXTRACTED_CHARS
+        for value in (text, text_box_text, header_footer_text)
+    )
     return ExtractedDocument(
         file_format="docx",
         text=text[:MAX_EXTRACTED_CHARS],
         truncated_chars=truncated,
         docx=DocxFeatures(
             table_count=len(document.tables),
-            text_box_text="\n".join(text_box_lines),
-            header_footer_text="\n".join(dict.fromkeys(header_footer_lines)),
+            text_box_text=text_box_text[:MAX_EXTRACTED_CHARS],
+            header_footer_text=header_footer_text[:MAX_EXTRACTED_CHARS],
             inline_image_count=sum(1 for _ in body.iter(_DRAWING_BLIP)),
             max_section_columns=max_columns,
         ),

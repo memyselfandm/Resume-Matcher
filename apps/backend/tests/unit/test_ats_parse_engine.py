@@ -139,6 +139,21 @@ class TestDocxChecks:
         assert check.params == {"fields": ["email", "phone"]}
         assert _check(report, "contact_email").status == "fail"
 
+    def test_header_phone_is_reported_despite_body_year_ranges(self) -> None:
+        text = _report("contact_in_header.docx").extracted_text_preview
+        document = extract_document((FIXTURES / "contact_in_header.docx").read_bytes(), "x.docx")
+        assert "2015 - 2019 2019 - 2021" in document.text
+        assert _check(_report("contact_in_header.docx"), "contact_phone").status == "fail"
+        assert "(555)" not in text
+
+    def test_text_box_content_is_reported_once_and_not_in_body(self) -> None:
+        report = _report("text_box.docx")
+        check = _check(report, "text_boxes")
+        assert check.status == "fail"
+        assert check.params == {"chars": len("Certified Kubernetes Administrator, 2022")}
+        assert "Kubernetes Administrator" not in report.extracted_text_preview
+        assert _check(_report("clean.docx"), "text_boxes").status == "pass"
+
     def test_clean_docx_contact_in_body_passes(self) -> None:
         report = _report("clean.docx")
         assert _check(report, "header_footer_contact").status == "pass"
