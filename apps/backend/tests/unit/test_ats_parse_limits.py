@@ -186,3 +186,15 @@ async def test_parse_checks_use_their_own_single_slot_limiter(
                     break
                 await asyncio.sleep(0.02)
     assert "ATS parse check failed after request cancellation" in caplog.text
+
+
+@pytest.mark.parametrize("error", [MemoryError, RuntimeError])
+def test_unexpected_errors_are_not_reported_as_invalid_documents(
+    monkeypatch: pytest.MonkeyPatch, error: type[BaseException]
+) -> None:
+    def explode(stream: object) -> None:
+        raise error("synthetic")
+
+    monkeypatch.setattr(extract_module, "open_bounded_pdf", explode)
+    with pytest.raises(error):
+        extract_document(b"%PDF-1.4", "x.pdf")
