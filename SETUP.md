@@ -349,6 +349,16 @@ LOG_LEVEL=INFO LOG_LLM=DEBUG docker compose up -d
 > allow a message for it to appear. If you set `LITELLM_LOG` from LiteLLM docs,
 > make sure `LOG_LLM` is set to an equal or lower level.
 
+### Optional PostgreSQL (Compose profile)
+
+The default `docker compose up` is unchanged. The `postgres` profile adds a PostgreSQL 17 container and a `resume-matcher-postgres` app. That app is built on top of the regular image with the backend's `postgres` extra, and it listens on `POSTGRES_APP_PORT` (default `3001`):
+
+```bash
+docker compose --profile postgres up -d resume-matcher-postgres
+```
+
+Set `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` to override the defaults (change the password for anything beyond local use).
+
 ### Important Notes
 
 - **API keys are best configured through the UI** at `http://localhost:3000/settings`
@@ -432,7 +442,7 @@ npm run dev -- -p 3001
 
 ### Database Management
 
-Resume Matcher uses TinyDB (JSON file storage). All data is in `apps/backend/data/`:
+Resume Matcher uses SQLite by default (`apps/backend/data/resume_matcher.db`). All local data is in `apps/backend/data/`:
 
 ```bash
 # View database files
@@ -444,6 +454,21 @@ cp -r apps/backend/data apps/backend/data-backup
 # Reset everything (start fresh)
 rm -rf apps/backend/data
 ```
+
+#### Optional: PostgreSQL
+
+SQLite remains the default. A PostgreSQL database helps with durability, backups, and remote or shared hosting. It does not add write throughput, because writes are still serialized.
+
+```bash
+cd apps/backend
+uv sync --extra postgres
+# In .env (postgres:// and postgresql:// URLs are also accepted)
+DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/resume_matcher
+# Optional: copy existing SQLite data (refuses a non-empty target without --force)
+uv run python -m app.scripts.migrate_sqlite_to_postgres
+```
+
+`config.json` and `.secret_key` stay in `apps/backend/data/`. Keep `.secret_key`, because it decrypts the API keys stored in the database. On Windows, run the PostgreSQL backend via Docker or WSL: psycopg's async mode does not support Windows' default event loop.
 
 ---
 
