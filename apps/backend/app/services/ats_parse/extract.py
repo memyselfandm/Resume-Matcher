@@ -489,7 +489,6 @@ def _validate_doc(content: bytes) -> ExtractedDocument:
     return ExtractedDocument(file_format="doc", text="")
 
 
-
 def extract_document(
     content: bytes, filename: str, *, deadline: float | None = None
 ) -> ExtractedDocument:

@@ -10,9 +10,9 @@ from docx import Document
 from app.services.ats_parse import check_document_sync
 from app.services.ats_parse.content_checks import (
     detect_content_language,
+    find_section_headings,
     has_email,
     has_phone,
-    find_section_headings,
     run_content_checks,
 )
 from app.services.ats_parse.engine import build_report
@@ -80,7 +80,7 @@ class TestGutterDetector:
             full = top - 3 * LINE_STEP
             lines.append(TextLine(30.0, full - LINE_HEIGHT, 582.0, full, "full width"))
             top = full - LINE_STEP
-        text_height = max(l.y1 for l in lines) - min(l.y0 for l in lines)
+        text_height = max(line.y1 for line in lines) - min(line.y0 for line in lines)
         candidates = find_gutters(_page(lines))
         assert all((c.run_top - c.run_bottom) / text_height < 0.4 for c in candidates)
         checks = _layout(lines)
