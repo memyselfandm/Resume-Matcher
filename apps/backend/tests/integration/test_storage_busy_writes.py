@@ -1,4 +1,9 @@
-"""Real SQLite contention must reach write callers as a retryable outcome."""
+"""Real writer contention must reach write callers as a retryable outcome.
+
+Runs on SQLite by default and on PostgreSQL when TEST_DATABASE_URL is set: the
+competing writer takes the same reservation the app uses (``BEGIN IMMEDIATE`` or
+the global advisory lock) and only the wait is shortened.
+"""
 
 from collections.abc import Iterator
 from typing import Any
@@ -16,17 +21,22 @@ from app.main import app
 
 @pytest.fixture
 def fast_busy_database(isolated_db: Database) -> Iterator[Database]:
-    """Keep real SQLite locks, shortening only the busy wait on test connections."""
+    """Keep real database locks, shortening only the wait on test connections."""
     isolated_db._ensure_initialized()
     assert isolated_db._async_engine is not None
     assert isolated_db._sync_engine is not None
     engines = [isolated_db._async_engine.sync_engine, isolated_db._sync_engine]
+    short_wait = (
+        "PRAGMA busy_timeout=10"
+        if isolated_db.dialect == "sqlite"
+        else "SET lock_timeout = '10ms'"
+    )
 
     def set_short_wait(connection: Any, record: Any, proxy: Any) -> None:
         del record, proxy
         cursor = connection.cursor()
         try:
-            cursor.execute("PRAGMA busy_timeout=10")
+            cursor.execute(short_wait)
         finally:
             cursor.close()
 
@@ -86,7 +96,7 @@ async def test_contended_public_write_returns_503_and_can_be_retried(
         base_url="http://test",
     ) as client:
         async with database._session() as writer:
-            await writer.execute(text("BEGIN IMMEDIATE"))
+            await writer.execute(database._reserve_writer)
             response = await client.request(method, url, json=payload)
             # WAL readers remain available; read behavior is not redesigned.
             assert (await client.get("/api/v1/resumes/list")).status_code == 200
@@ -153,7 +163,7 @@ async def test_non_endpoint_writers_translate_busy_without_partial_changes(
             await database.reset_database()
 
     async with database._session() as writer:
-        await writer.execute(text("BEGIN IMMEDIATE"))
+        await writer.execute(database._reserve_writer)
         with pytest.raises(DatabaseBusyError):
             await mutate()
 
@@ -170,6 +180,7 @@ async def test_non_endpoint_writers_translate_busy_without_partial_changes(
     ) == "committed"
 
 
+@pytest.mark.sqlite_only
 async def test_non_busy_sqlite_write_error_is_not_marked_retryable(
     fast_busy_database: Database,
 ) -> None:

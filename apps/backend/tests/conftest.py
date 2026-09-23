@@ -8,8 +8,12 @@ import tempfile
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any, NoReturn
+from uuid import uuid4
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine, make_url
+from sqlalchemy.pool import NullPool
 
 
 # Set DATA_DIR before pytest imports any test module. Several integration tests
@@ -25,6 +29,57 @@ import app.config as _config_module  # noqa: E402 - DATA_DIR must be set first
 
 _IMPORTED_CONFIG_FILE_PATH = _config_module.CONFIG_FILE_PATH
 
+from app.db_engine import normalize_database_url  # noqa: E402
+
+# Opt-in PostgreSQL run: TEST_DATABASE_URL=postgresql+psycopg://... uv run pytest
+# Each test gets its own schema (selected through ``search_path`` on both
+# engines), dropped afterwards. Unset keeps the default temp-file SQLite run.
+_TEST_DATABASE_URL = (
+    normalize_database_url(os.environ["TEST_DATABASE_URL"])
+    if os.environ.get("TEST_DATABASE_URL", "").strip()
+    else None
+)
+USING_POSTGRES = _TEST_DATABASE_URL is not None
+_postgres_admin_engine: Engine | None = None
+
+
+def _postgres_admin(statement: str) -> None:
+    """Run one DDL statement on the PostgreSQL test server (autocommit)."""
+    global _postgres_admin_engine
+    assert _TEST_DATABASE_URL is not None
+    if _postgres_admin_engine is None:
+        _postgres_admin_engine = create_engine(
+            _TEST_DATABASE_URL, poolclass=NullPool, isolation_level="AUTOCOMMIT"
+        )
+    with _postgres_admin_engine.connect() as connection:
+        connection.exec_driver_sql(statement)
+
+
+def postgres_schema_url(schema: str) -> str:
+    """Return the test server URL with ``schema`` as the only search_path entry."""
+    assert _TEST_DATABASE_URL is not None
+    return (
+        make_url(_TEST_DATABASE_URL)
+        .update_query_dict({"options": f"-c search_path={schema}"})
+        .render_as_string(hide_password=False)
+    )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Skip tests bound to the backend that this run does not target."""
+    del config  # Hook argument is required by pytest but otherwise unused.
+    if USING_POSTGRES:
+        skip = pytest.mark.skip(reason="SQLite driver behavior; TEST_DATABASE_URL targets PostgreSQL")
+        marker = "sqlite_only"
+    else:
+        skip = pytest.mark.skip(reason="requires TEST_DATABASE_URL (PostgreSQL)")
+        marker = "postgres_only"
+    for item in items:
+        if marker in item.keywords:
+            item.add_marker(skip)
+
 
 class UnexpectedNetworkAccess(RuntimeError):
     """Raised when a deterministic backend test attempts a real connection."""
@@ -33,6 +88,8 @@ class UnexpectedNetworkAccess(RuntimeError):
 def pytest_unconfigure(config: pytest.Config) -> None:
     """Restore the caller environment and remove session-level temporary data."""
     del config  # Hook argument is required by pytest but otherwise unused.
+    if _postgres_admin_engine is not None:
+        _postgres_admin_engine.dispose()
     if _ORIGINAL_DATA_DIR is None:
         os.environ.pop("DATA_DIR", None)
     else:
@@ -86,7 +143,14 @@ async def isolated_backend_state(
     from app.database import Database
 
     test_data_dir = tmp_path / "data"
-    test_db = Database(db_path=test_data_dir / "resume_matcher.db")
+    schema: str | None = None
+    if USING_POSTGRES:
+        test_data_dir.mkdir(parents=True)  # SQLite's Database creates it.
+        schema = f"test_{uuid4().hex}"
+        _postgres_admin(f'CREATE SCHEMA "{schema}"')
+        test_db = Database(database_url=postgres_schema_url(schema))
+    else:
+        test_db = Database(db_path=test_data_dir / "resume_matcher.db")
 
     monkeypatch.setattr(config_module.settings, "data_dir", test_data_dir)
     # Preserve compatibility with code/tests that still monkeypatch the legacy
@@ -110,7 +174,11 @@ async def isolated_backend_state(
     finally:
         invalidate_config_cache()
         crypto.reset_cache()
+        # psycopg async connections are bound to this test's event loop, so
+        # engines are disposed per test before the schema is dropped.
         await test_db.close()
+        if schema is not None:
+            _postgres_admin(f'DROP SCHEMA "{schema}" CASCADE')
 
 
 # ---------------------------------------------------------------------------
@@ -292,5 +360,5 @@ def sample_changes():
 
 @pytest.fixture
 def isolated_db(isolated_backend_state: Any) -> Any:
-    """Expose the default per-test real SQLite database to tests that need it."""
+    """Expose the per-test real database (SQLite, or PostgreSQL schema) to tests."""
     return isolated_backend_state
