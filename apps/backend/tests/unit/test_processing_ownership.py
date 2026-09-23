@@ -2,10 +2,13 @@
 
 from pathlib import Path
 
+import pytest
+
 from app.database import Database
 from app.db_engine import init_models_sync, make_sync_engine
 
 
+@pytest.mark.sqlite_only
 def test_processing_token_migration_is_idempotent(tmp_path: Path) -> None:
     """Existing resume tables gain exactly one nullable ownership column."""
     engine = make_sync_engine(tmp_path / "legacy.db")

@@ -145,7 +145,9 @@ async def test_concurrent_confirmation_does_not_repeat_optional_generation(
         assert second.status_code == 409
         assert second.headers.get("Retry-After")
         assert calls == 1
-        other = Database(db_path=isolated_db.db_path)
+        other = Database(
+            db_path=isolated_db.db_path, database_url=isolated_db.database_url
+        )
         try:
             with pytest.raises(PreviewBusyError):
                 await other.claim_preview(
