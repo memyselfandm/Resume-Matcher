@@ -6,28 +6,51 @@ stay identical without touching router code. Requests never leave the process.
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI
 from mcp.server.mcpserver.exceptions import ToolError
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+# The upload router's accepted extensions and raw size limit, imported so the
+# pre-send checks can never drift from the route's own validation.
+from app.routers.resumes import DOCUMENT_TYPES_BY_EXTENSION as UPLOAD_CONTENT_TYPES
+from app.routers.resumes import MAX_FILE_SIZE as MAX_UPLOAD_BYTES
 
 logger = logging.getLogger(__name__)
 
 BRIDGE_BASE_URL = "http://mcp.local"
 API_PREFIX = "/api/v1"
 
-# Mirrors the upload router's accepted extensions and raw size limit
-# (app/routers/resumes.py DOCUMENT_TYPES_BY_EXTENSION / MAX_FILE_SIZE).
-UPLOAD_CONTENT_TYPES: dict[str, str] = {
-    ".pdf": "application/pdf",
-    ".doc": "application/msword",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
-MAX_UPLOAD_BYTES = 4 * 1024 * 1024
+# Resume, job and application ids are UUID4 strings. Anything interpolated
+# into a route path must be a single safe segment: httpx normalizes ``..``
+# and treats ``?``/``#`` as delimiters, so a raw id could re-target another
+# route.
+PATH_SEGMENT_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,128}")
+# Every bridged route path: one or more safe segments, nothing else.
+ROUTE_PATH_PATTERN = re.compile(r"(?:/[A-Za-z0-9_-]+)+")
 
 GENERIC_SERVER_ERROR = "Resume Matcher failed to complete the request. Please try again."
+
+
+class InvalidIdentifierError(ToolError):
+    """Raised when an id cannot be used as a single URL path segment."""
+
+
+def path_segment(value: str, name: str = "id") -> str:
+    """Return ``value`` if it is a safe single path segment.
+
+    Raises:
+        InvalidIdentifierError: If ``value`` is empty, too long, or contains
+            anything other than letters, digits, ``-`` or ``_``.
+    """
+    if not isinstance(value, str) or PATH_SEGMENT_PATTERN.fullmatch(value) is None:
+        raise InvalidIdentifierError(
+            f"Invalid {name}: use the id exactly as returned by Resume Matcher."
+        )
+    return value
 
 
 class BridgeError(ToolError):
@@ -95,15 +118,40 @@ def _error_message(response: httpx.Response) -> str:
     return f"Request failed with status {response.status_code}."
 
 
+class _ExceptionLoggingApp:
+    """ASGI shim that logs unhandled router exceptions before re-raising.
+
+    ``ASGITransport(raise_app_exceptions=False)`` turns them into bare 500
+    responses without logging; this keeps the traceback in the server log
+    while clients only ever see a generic message.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await self._app(scope, receive, send)
+        except Exception:
+            logger.exception(
+                "Unhandled exception in MCP bridge request %s %s",
+                scope.get("method"),
+                scope.get("path"),
+            )
+            raise
+
+
 class AppBridge:
     """HTTP client bound to the FastAPI app through ``httpx.ASGITransport``."""
 
-    def __init__(self, app: FastAPI) -> None:
+    def __init__(self, app: ASGIApp) -> None:
         # raise_app_exceptions=False turns unhandled router exceptions into 500
         # responses instead of re-raising tracebacks into the tool layer. Route
         # budgets already bound AI calls, so the client applies no timeout.
         self._client = httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            transport=httpx.ASGITransport(
+                app=_ExceptionLoggingApp(app), raise_app_exceptions=False
+            ),
             base_url=BRIDGE_BASE_URL,
             timeout=None,
         )
@@ -124,9 +172,14 @@ class AppBridge:
         """Send a request to ``/api/v1{path}`` and return the 2xx response.
 
         Raises:
+            InvalidIdentifierError: If ``path`` is not made of safe segments
+                (defense in depth; tools validate ids with ``path_segment``).
             BridgeError: For any non-2xx response, carrying the router's
                 client-safe detail (or a generic message for detail-less 5xx).
         """
+        if ROUTE_PATH_PATTERN.fullmatch(path) is None:
+            logger.warning("MCP bridge refused unsafe route path %r", path)
+            raise InvalidIdentifierError("Invalid id: use the id exactly as returned by Resume Matcher.")
         response = await self._client.request(
             method,
             f"{API_PREFIX}{path}",

@@ -8,6 +8,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
+from app.mcp.bridge import path_segment
 from app.mcp.runtime import MCPRuntime, WaitSeconds
 
 ResumeTemplate = Literal[
@@ -49,8 +50,10 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
     ) -> dict[str, Any]:
         """Generate and save a cover letter for a tailored resume's job."""
 
+        segment = path_segment(resume_id, "resume_id")
+
         async def operation() -> dict[str, Any]:
-            body = await runtime.bridge.post_json(f"/resumes/{resume_id}/generate-cover-letter")
+            body = await runtime.bridge.post_json(f"/resumes/{segment}/generate-cover-letter")
             return {"resume_id": resume_id, "cover_letter": body["content"]}
 
         return await runtime.run_long_operation("generate_cover_letter", operation, wait_seconds, ctx)
@@ -63,8 +66,10 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
     ) -> dict[str, Any]:
         """Generate and save a recruiter outreach message for a tailored resume's job."""
 
+        segment = path_segment(resume_id, "resume_id")
+
         async def operation() -> dict[str, Any]:
-            body = await runtime.bridge.post_json(f"/resumes/{resume_id}/generate-outreach")
+            body = await runtime.bridge.post_json(f"/resumes/{segment}/generate-outreach")
             return {"resume_id": resume_id, "outreach_message": body["content"]}
 
         return await runtime.run_long_operation("generate_outreach", operation, wait_seconds, ctx)
@@ -77,8 +82,10 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
     ) -> dict[str, Any]:
         """Generate and save interview preparation for a tailored resume's job."""
 
+        segment = path_segment(resume_id, "resume_id")
+
         async def operation() -> dict[str, Any]:
-            body = await runtime.bridge.post_json(f"/resumes/{resume_id}/generate-interview-prep")
+            body = await runtime.bridge.post_json(f"/resumes/{segment}/generate-interview-prep")
             return {"resume_id": resume_id, "interview_prep": body["interview_prep"]}
 
         return await runtime.run_long_operation("generate_interview_prep", operation, wait_seconds, ctx)
@@ -101,6 +108,7 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         get_status.pdf_export_ready). On stdio, pass out_path to write a file;
         otherwise the PDF is returned as base64.
         """
+        segment = path_segment(resume_id, "resume_id")
         destination: Path | None = None
         if out_path is not None:
             if not runtime.local_files_allowed:
@@ -110,7 +118,7 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         async def operation() -> dict[str, Any]:
             response = await runtime.bridge.request(
                 "GET",
-                f"/resumes/{resume_id}/pdf",
+                f"/resumes/{segment}/pdf",
                 params={"template": template, "pageSize": page_size},
             )
             pdf = response.content

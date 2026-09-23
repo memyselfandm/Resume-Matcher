@@ -6,6 +6,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
+from app.mcp.bridge import path_segment
 from app.mcp.runtime import MCPRuntime
 from app.schemas.applications import ApplicationStatus
 
@@ -79,4 +80,5 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         }
         if status is not None:
             updates["status"] = status.value
-        return await runtime.bridge.patch_json(f"/applications/{application_id}", updates)
+        segment = path_segment(application_id, "application_id")
+        return await runtime.bridge.patch_json(f"/applications/{segment}", updates)

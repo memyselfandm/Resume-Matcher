@@ -10,7 +10,12 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from app.mcp.bridge import MAX_UPLOAD_BYTES, check_upload_size, upload_content_type
+from app.mcp.bridge import (
+    MAX_UPLOAD_BYTES,
+    check_upload_size,
+    path_segment,
+    upload_content_type,
+)
 from app.mcp.formatting import resume_markdown, resume_summary
 from app.mcp.runtime import MCPRuntime
 
@@ -29,6 +34,9 @@ def _read_local_file(path: str) -> tuple[str, bytes]:
 
 def _decode_base64(content_base64: str) -> bytes:
     """Decode an upload payload, refusing oversized input before decoding."""
+    # MIME-style encoders wrap lines (e.g. every 76 characters); whitespace
+    # carries no data, so drop it before strict decoding.
+    content_base64 = "".join(content_base64.split())
     # Every 4 base64 characters carry 3 bytes; reject early without decoding.
     if len(content_base64) * 3 // 4 > MAX_UPLOAD_BYTES + 3:
         check_upload_size(len(content_base64) * 3 // 4)
@@ -40,7 +48,8 @@ def _decode_base64(content_base64: str) -> bytes:
 
 async def fetch_resume(runtime: MCPRuntime, resume_id: str) -> dict[str, Any]:
     """Return the ``data`` payload of ``GET /resumes?resume_id=``."""
-    body = await runtime.bridge.get_json("/resumes", params={"resume_id": resume_id})
+    params = {"resume_id": path_segment(resume_id, "resume_id")}
+    body = await runtime.bridge.get_json("/resumes", params=params)
     return body["data"]
 
 
@@ -129,7 +138,8 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         ],
     ) -> dict[str, Any]:
         """Replace a resume's structured data with a full ResumeData object."""
-        body = await runtime.bridge.patch_json(f"/resumes/{resume_id}", resume_data)
+        segment = path_segment(resume_id, "resume_id")
+        body = await runtime.bridge.patch_json(f"/resumes/{segment}", resume_data)
         return resume_summary(body["data"])
 
     @server.tool(annotations=ToolAnnotations(idempotent_hint=True))
@@ -138,5 +148,7 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         title: Annotated[str, Field(description="New title (trimmed to 80 characters).")],
     ) -> dict[str, Any]:
         """Set a resume's display title."""
-        await runtime.bridge.patch_json(f"/resumes/{resume_id}/title", {"title": title})
+        await runtime.bridge.patch_json(
+            f"/resumes/{path_segment(resume_id, 'resume_id')}/title", {"title": title}
+        )
         return {"resume_id": resume_id, "title": title.strip()[:80]}
