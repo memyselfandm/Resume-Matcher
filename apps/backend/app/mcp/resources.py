@@ -3,7 +3,7 @@
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError
 
-from app.mcp.bridge import BridgeError
+from app.mcp.bridge import BridgeError, InvalidIdentifierError, path_segment
 from app.mcp.formatting import resume_markdown
 from app.mcp.runtime import MCPRuntime
 from app.mcp.tools.resumes import fetch_resume
@@ -28,6 +28,8 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
     async def resume_resource(resume_id: str) -> str:
         try:
             data = await fetch_resume(runtime, resume_id)
+        except InvalidIdentifierError:
+            raise ResourceNotFoundError("Resume not found") from None
         except BridgeError as error:
             raise _resource_error(error, "Resume") from None
         return resume_markdown(data)
@@ -40,7 +42,9 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
     )
     async def job_resource(job_id: str) -> str:
         try:
-            job = await runtime.bridge.get_json(f"/jobs/{job_id}")
+            job = await runtime.bridge.get_json(f"/jobs/{path_segment(job_id, 'job_id')}")
+        except InvalidIdentifierError:
+            raise ResourceNotFoundError("Job not found") from None
         except BridgeError as error:
             raise _resource_error(error, "Job") from None
         return str(job.get("content") or "")

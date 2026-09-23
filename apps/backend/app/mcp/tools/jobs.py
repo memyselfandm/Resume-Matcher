@@ -6,6 +6,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
+from app.mcp.bridge import path_segment
 from app.mcp.runtime import MCPRuntime
 
 JOB_PREVIEW_CHARS = 500
@@ -38,7 +39,7 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         ] = False,
     ) -> dict[str, Any]:
         """Fetch a stored job description and its extracted company/role."""
-        job = await runtime.bridge.get_json(f"/jobs/{job_id}")
+        job = await runtime.bridge.get_json(f"/jobs/{path_segment(job_id, 'job_id')}")
         content = job.get("content") or ""
         result: dict[str, Any] = {
             "job_id": job.get("job_id", job_id),
