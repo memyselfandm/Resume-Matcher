@@ -1,0 +1,699 @@
+[
+  {
+    "inputSchema": {
+      "properties": {},
+      "title": "get_statusArguments",
+      "type": "object"
+    },
+    "name": "get_status"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "content_base64": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Base64-encoded file content (max 4 MB decoded).",
+          "title": "Content Base64"
+        },
+        "filename": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "File name with .pdf, .doc or .docx extension (required with content_base64).",
+          "title": "Filename"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Local file path to upload. Only available on the stdio transport.",
+          "title": "Path"
+        }
+      },
+      "title": "upload_resumeArguments",
+      "type": "object"
+    },
+    "name": "upload_resume"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "include_master": {
+          "default": true,
+          "description": "Include the master resume.",
+          "title": "Include Master",
+          "type": "boolean"
+        }
+      },
+      "title": "list_resumesArguments",
+      "type": "object"
+    },
+    "name": "list_resumes"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "format": {
+          "default": "summary",
+          "description": "summary (default), json (full ResumeData) or markdown.",
+          "enum": [
+            "summary",
+            "json",
+            "markdown"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "resume_id": {
+          "description": "Resume id.",
+          "title": "Resume Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resume_id"
+      ],
+      "title": "get_resumeArguments",
+      "type": "object"
+    },
+    "name": "get_resume"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "resume_data": {
+          "additionalProperties": true,
+          "description": "Complete ResumeData object (get_resume format=json returns one); replaces the stored data.",
+          "title": "Resume Data",
+          "type": "object"
+        },
+        "resume_id": {
+          "description": "Resume id.",
+          "title": "Resume Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resume_id",
+        "resume_data"
+      ],
+      "title": "update_resumeArguments",
+      "type": "object"
+    },
+    "name": "update_resume"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "resume_id": {
+          "description": "Resume id.",
+          "title": "Resume Id",
+          "type": "string"
+        },
+        "title": {
+          "description": "New title (trimmed to 80 characters).",
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resume_id",
+        "title"
+      ],
+      "title": "set_resume_titleArguments",
+      "type": "object"
+    },
+    "name": "set_resume_title"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "descriptions": {
+          "description": "One or more full job description texts.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Descriptions",
+          "type": "array"
+        },
+        "resume_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional resume id to associate with the jobs.",
+          "title": "Resume Id"
+        }
+      },
+      "required": [
+        "descriptions"
+      ],
+      "title": "add_jobsArguments",
+      "type": "object"
+    },
+    "name": "add_jobs"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "full": {
+          "default": false,
+          "description": "Return the full description instead of a preview.",
+          "title": "Full",
+          "type": "boolean"
+        },
+        "job_id": {
+          "description": "Job id.",
+          "title": "Job Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id"
+      ],
+      "title": "get_jobArguments",
+      "type": "object"
+    },
+    "name": "get_job"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "job_id": {
+          "description": "Job id from add_jobs.",
+          "title": "Job Id",
+          "type": "string"
+        },
+        "prompt_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tailoring prompt id; defaults to the configured prompt.",
+          "title": "Prompt Id"
+        },
+        "resume_id": {
+          "description": "Source (usually master) resume id.",
+          "title": "Resume Id",
+          "type": "string"
+        },
+        "wait_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds to wait for completion before returning a task_id to poll with get_task. Defaults: 200 (stdio), 45 (HTTP).",
+          "title": "Wait Seconds"
+        }
+      },
+      "required": [
+        "resume_id",
+        "job_id"
+      ],
+      "title": "tailor_resume_previewArguments",
+      "type": "object"
+    },
+    "name": "tailor_resume_preview"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "preview_id": {
+          "description": "preview_id from tailor_resume_preview.",
+          "title": "Preview Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "preview_id"
+      ],
+      "title": "tailor_resume_confirmArguments",
+      "type": "object"
+    },
+    "name": "tailor_resume_confirm"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "resume_id": {
+          "description": "Tailored resume id (from tailor_resume_confirm).",
+          "title": "Resume Id",
+          "type": "string"
+        },
+        "wait_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds to wait for completion before returning a task_id to poll with get_task. Defaults: 200 (stdio), 45 (HTTP).",
+          "title": "Wait Seconds"
+        }
+      },
+      "required": [
+        "resume_id"
+      ],
+      "title": "generate_cover_letterArguments",
+      "type": "object"
+    },
+    "name": "generate_cover_letter"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "resume_id": {
+          "description": "Tailored resume id (from tailor_resume_confirm).",
+          "title": "Resume Id",
+          "type": "string"
+        },
+        "wait_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds to wait for completion before returning a task_id to poll with get_task. Defaults: 200 (stdio), 45 (HTTP).",
+          "title": "Wait Seconds"
+        }
+      },
+      "required": [
+        "resume_id"
+      ],
+      "title": "generate_outreachArguments",
+      "type": "object"
+    },
+    "name": "generate_outreach"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "resume_id": {
+          "description": "Tailored resume id (from tailor_resume_confirm).",
+          "title": "Resume Id",
+          "type": "string"
+        },
+        "wait_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds to wait for completion before returning a task_id to poll with get_task. Defaults: 200 (stdio), 45 (HTTP).",
+          "title": "Wait Seconds"
+        }
+      },
+      "required": [
+        "resume_id"
+      ],
+      "title": "generate_interview_prepArguments",
+      "type": "object"
+    },
+    "name": "generate_interview_prep"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "out_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "stdio only: write the PDF to this local .pdf path instead of returning base64.",
+          "title": "Out Path"
+        },
+        "page_size": {
+          "default": "A4",
+          "description": "Page size.",
+          "enum": [
+            "A4",
+            "LETTER"
+          ],
+          "title": "Page Size",
+          "type": "string"
+        },
+        "resume_id": {
+          "description": "Resume id.",
+          "title": "Resume Id",
+          "type": "string"
+        },
+        "template": {
+          "default": "swiss-single",
+          "description": "Resume template.",
+          "enum": [
+            "swiss-single",
+            "swiss-two-column",
+            "modern",
+            "modern-two-column",
+            "latex",
+            "clean",
+            "vivid"
+          ],
+          "title": "Template",
+          "type": "string"
+        },
+        "wait_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds to wait for completion before returning a task_id to poll with get_task. Defaults: 200 (stdio), 45 (HTTP).",
+          "title": "Wait Seconds"
+        }
+      },
+      "required": [
+        "resume_id"
+      ],
+      "title": "export_resume_pdfArguments",
+      "type": "object"
+    },
+    "name": "export_resume_pdf"
+  },
+  {
+    "inputSchema": {
+      "$defs": {
+        "ApplicationStatus": {
+          "description": "The seven stable tracker columns (decoupled from i18n labels).",
+          "enum": [
+            "saved",
+            "applied",
+            "no_response",
+            "response",
+            "interview",
+            "accepted",
+            "rejected"
+          ],
+          "title": "ApplicationStatus",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApplicationStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Only return cards in this column."
+        }
+      },
+      "title": "list_applicationsArguments",
+      "type": "object"
+    },
+    "name": "list_applications"
+  },
+  {
+    "inputSchema": {
+      "$defs": {
+        "ApplicationStatus": {
+          "description": "The seven stable tracker columns (decoupled from i18n labels).",
+          "enum": [
+            "saved",
+            "applied",
+            "no_response",
+            "response",
+            "interview",
+            "accepted",
+            "rejected"
+          ],
+          "title": "ApplicationStatus",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "company": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Company (extracted when omitted).",
+          "title": "Company"
+        },
+        "job_description": {
+          "description": "Full job description text.",
+          "minLength": 1,
+          "title": "Job Description",
+          "type": "string"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Free-form notes.",
+          "title": "Notes"
+        },
+        "resume_id": {
+          "description": "Resume used for this application.",
+          "title": "Resume Id",
+          "type": "string"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Role (extracted when omitted).",
+          "title": "Role"
+        },
+        "status": {
+          "$ref": "#/$defs/ApplicationStatus",
+          "default": "applied",
+          "description": "Initial column."
+        }
+      },
+      "required": [
+        "resume_id",
+        "job_description"
+      ],
+      "title": "create_applicationArguments",
+      "type": "object"
+    },
+    "name": "create_application"
+  },
+  {
+    "inputSchema": {
+      "$defs": {
+        "ApplicationStatus": {
+          "description": "The seven stable tracker columns (decoupled from i18n labels).",
+          "enum": [
+            "saved",
+            "applied",
+            "no_response",
+            "response",
+            "interview",
+            "accepted",
+            "rejected"
+          ],
+          "title": "ApplicationStatus",
+          "type": "string"
+        }
+      },
+      "properties": {
+        "application_id": {
+          "description": "Tracker card id.",
+          "title": "Application Id",
+          "type": "string"
+        },
+        "applied_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ISO-8601 date the application was sent.",
+          "title": "Applied At"
+        },
+        "company": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Company name.",
+          "title": "Company"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Replace the card's notes.",
+          "title": "Notes"
+        },
+        "position": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Position within the column.",
+          "title": "Position"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Role title.",
+          "title": "Role"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApplicationStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Move to this column."
+        }
+      },
+      "required": [
+        "application_id"
+      ],
+      "title": "update_applicationArguments",
+      "type": "object"
+    },
+    "name": "update_application"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "task_id": {
+          "description": "task_id returned by a long-running tool.",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "title": "get_taskArguments",
+      "type": "object"
+    },
+    "name": "get_task"
+  },
+  {
+    "inputSchema": {
+      "properties": {
+        "task_id": {
+          "description": "task_id of a running operation.",
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "title": "cancel_taskArguments",
+      "type": "object"
+    },
+    "name": "cancel_task"
+  }
+]
