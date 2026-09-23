@@ -117,8 +117,11 @@ class MCPRuntime:
             await _heartbeat(ctx, loop.time() - started, name)
 
         if record.status == "succeeded":
-            return {"status": "succeeded", "task_id": record.task_id, **(record.result or {})}
+            result = {"status": "succeeded", "task_id": record.task_id, **(record.result or {})}
+            record.mark_delivered()
+            return result
         if record.status in ("failed", "cancelled"):
+            record.mark_delivered()
             raise ToolError(record.error or "The operation did not complete.")
         return {
             "status": "running",

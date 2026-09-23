@@ -24,10 +24,13 @@ TaskStatus = Literal["running", "succeeded", "failed", "cancelled"]
 DEFAULT_MAX_TASKS = 32
 DEFAULT_RETENTION_SECONDS = 3600.0
 GENERIC_TASK_ERROR = "The operation failed unexpectedly. Please try again."
+# Large result fields handed out once: after the first delivery they are
+# dropped from the retained record so the registry does not pin big payloads.
+RELEASE_AFTER_DELIVERY_KEYS = ("content_base64",)
 
 
 class TaskCapacityError(ToolError):
-    """Raised when every task slot is held by a running operation."""
+    """Raised when every slot holds a running task or an unread result."""
 
 
 @dataclass
@@ -41,6 +44,7 @@ class TaskRecord:
     finished_at: float | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
+    delivered: bool = False
     _task: asyncio.Task[dict[str, Any]] | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -55,6 +59,18 @@ class TaskRecord:
         if self.error is not None:
             payload["error"] = self.error
         return payload
+
+    def mark_delivered(self) -> None:
+        """Record that the client has seen the final state; release payloads."""
+        if self.status == "running":
+            return
+        self.delivered = True
+        if self.result is None:
+            return
+        released = [key for key in RELEASE_AFTER_DELIVERY_KEYS if key in self.result]
+        if released:
+            self.result = {k: v for k, v in self.result.items() if k not in released}
+            self.result["payload_released"] = True
 
 
 class TaskRegistry:
@@ -75,13 +91,14 @@ class TaskRegistry:
         """Schedule ``operation`` and return its record immediately.
 
         Raises:
-            TaskCapacityError: If ``max_tasks`` operations are still running.
+            TaskCapacityError: If every slot holds a running operation or a
+                finished result the client has not read yet.
         """
         self._prune()
         if len(self._records) >= self._max_tasks:
             raise TaskCapacityError(
-                "Too many operations are running. Wait for one to finish "
-                "(poll get_task) or cancel one with cancel_task."
+                "Too many operations are running or have unread results. Poll "
+                "get_task for finished ones or cancel one with cancel_task, then retry."
             )
         record = TaskRecord(task_id=uuid4().hex, name=name, created_at=self._clock())
 
@@ -165,9 +182,11 @@ class TaskRegistry:
         ]
         for task_id in expired:
             del self._records[task_id]
-        # Over capacity: drop the oldest finished records first.
+        # At capacity: make room only by dropping results the client has
+        # already read (oldest first); unread results are kept until they
+        # expire, so a slow poller never loses its answer.
         if len(self._records) >= self._max_tasks:
-            for task_id in [key for key, value in self._records.items() if value.status != "running"]:
+            for task_id in [key for key, value in self._records.items() if value.delivered]:
                 if len(self._records) < self._max_tasks:
                     break
                 del self._records[task_id]

@@ -117,36 +117,49 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
     @server.tool()
     async def tailor_resume_confirm(
         preview_id: Annotated[str, Field(description="preview_id from tailor_resume_preview.")],
+        ctx: Context,
+        wait_seconds: WaitSeconds = None,
     ) -> dict[str, Any]:
         """Save a previewed tailored resume.
 
         Creates the tailored resume (parent_id = source resume) and its
         tracker card. Returns tailored_resume_id and application_id; update
         the card with update_application rather than creating another.
+        Retrying with the same preview_id returns the same result. May return
+        status=running with a task_id.
         """
         preview = runtime.previews.get(preview_id)
         if preview is None:
             raise ToolError(PREVIEW_MISS_MESSAGE)
-        body = await runtime.bridge.post_json(
-            "/resumes/improve/confirm",
-            {
-                "resume_id": preview.resume_id,
+
+        async def operation() -> dict[str, Any]:
+            # The preview stays cached until it expires: a retry replays the
+            # router's stored confirmation instead of creating anything new.
+            body = await runtime.bridge.post_json(
+                "/resumes/improve/confirm",
+                {
+                    "resume_id": preview.resume_id,
+                    "job_id": preview.job_id,
+                    "preview_id": preview.preview_id,
+                    "improved_data": preview.improved_data,
+                    "improvements": preview.improvements,
+                },
+            )
+            data = body["data"]
+            tailored_resume_id = data["resume_id"]
+            application_id = await _find_application_id(
+                runtime, preview.job_id, tailored_resume_id
+            )
+            return {
+                "tailored_resume_id": tailored_resume_id,
+                "source_resume_id": preview.resume_id,
                 "job_id": preview.job_id,
-                "preview_id": preview.preview_id,
-                "improved_data": preview.improved_data,
-                "improvements": preview.improvements,
-            },
+                "application_id": application_id,
+                "has_cover_letter": bool(data.get("cover_letter")),
+                "has_outreach_message": bool(data.get("outreach_message")),
+                "warnings": data.get("warnings") or [],
+            }
+
+        return await runtime.run_long_operation(
+            "tailor_resume_confirm", operation, wait_seconds, ctx
         )
-        data = body["data"]
-        tailored_resume_id = data["resume_id"]
-        runtime.previews.discard(preview_id)
-        application_id = await _find_application_id(runtime, preview.job_id, tailored_resume_id)
-        return {
-            "tailored_resume_id": tailored_resume_id,
-            "source_resume_id": preview.resume_id,
-            "job_id": preview.job_id,
-            "application_id": application_id,
-            "has_cover_letter": bool(data.get("cover_letter")),
-            "has_outreach_message": bool(data.get("outreach_message")),
-            "warnings": data.get("warnings") or [],
-        }
