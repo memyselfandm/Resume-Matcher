@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
 import httpx
@@ -13,7 +14,7 @@ from pydantic import Field
 
 from app.config import settings
 from app.database import db
-from app.instance_id import get_db_instance_id
+from app.instance_id import database_established, get_db_instance_id
 from app.llm import get_llm_config
 from app.mcp.runtime import MCPRuntime
 
@@ -36,22 +37,37 @@ def print_data_origin() -> str:
     return INTERNAL_API_ORIGIN
 
 
-async def _probe_backend(origin: str) -> tuple[bool, str | None]:
-    """Return (reachable, db_instance_id) for the backend at ``origin``."""
+@dataclass(frozen=True)
+class BackendProbe:
+    """What the backend at the print page's data origin reported."""
+
+    reachable: bool
+    reports_instance_id: bool = False
+    instance_id: str | None = None
+
+
+async def _probe_backend(origin: str) -> BackendProbe:
+    """Ask the backend at ``origin`` for its ``db_instance_id``."""
     try:
         async with httpx.AsyncClient(timeout=PROBE_TIMEOUT_SECONDS) as client:
             response = await client.get(f"{origin}/api/v1/health")
     except Exception:  # noqa: BLE001 - any failure means "not reachable"
         logger.debug("MCP status: backend probe failed for %s", origin, exc_info=True)
-        return False, None
+        return BackendProbe(reachable=False)
     if not response.is_success:
-        return False, None
+        return BackendProbe(reachable=False)
     try:
         body = response.json()
     except ValueError:
-        return True, None
-    instance_id = body.get("db_instance_id") if isinstance(body, dict) else None
-    return True, instance_id if isinstance(instance_id, str) else None
+        return BackendProbe(reachable=True)
+    if not isinstance(body, dict) or "db_instance_id" not in body:
+        return BackendProbe(reachable=True)
+    instance_id = body["db_instance_id"]
+    return BackendProbe(
+        reachable=True,
+        reports_instance_id=True,
+        instance_id=instance_id if isinstance(instance_id, str) else None,
+    )
 
 
 async def _probe_frontend(url: str) -> bool:
@@ -65,30 +81,33 @@ async def _probe_frontend(url: str) -> bool:
     return response.status_code < 500
 
 
-def _render_path(
-    backend_reachable: bool,
-    remote_id: str | None,
-    local_id: str | None,
-    local_resume_count: int,
-    origin: str,
-) -> tuple[RenderPathOk, str]:
-    """Decide whether the print page reads the same database as this process."""
-    if not backend_reachable:
+def _render_path(probe: BackendProbe, local_id: str | None, origin: str) -> tuple[RenderPathOk, str]:
+    """Decide whether the print page reads the same database as this process.
+
+    Ids are compared whenever both sides have one. A side without an id has
+    no database yet, so exactly one missing id means different directories;
+    both missing (two empty data directories) cannot be decided.
+    """
+    if not probe.reachable:
         return False, (
             f"No backend answered at {origin}. PDF export needs the backend HTTP "
             "server running on the same DATA_DIR as this MCP server."
         )
-    if remote_id is None:
+    if not probe.reports_instance_id:
         return "unknown", f"The backend at {origin} does not report db_instance_id."
-    if local_id is None:
-        return "unknown", "This server's database instance id is unavailable."
-    if local_resume_count == 0:
-        return "unknown", "No resumes are stored yet, so there is nothing to render."
-    if remote_id == local_id:
-        return True, f"The backend at {origin} uses the same database."
+    remote_id = probe.instance_id
+    if remote_id is not None and local_id is not None:
+        if remote_id == local_id:
+            return True, f"The backend at {origin} uses the same database."
+        return False, (
+            f"The backend at {origin} uses a different data directory; PDFs would "
+            "render another database's resumes. Point both at the same DATA_DIR."
+        )
+    if remote_id is None and local_id is None:
+        return "unknown", "Neither database has been created yet, so identity cannot be established."
     return False, (
-        f"The backend at {origin} uses a different data directory; PDFs would "
-        "render another database's resumes. Point both at the same DATA_DIR."
+        f"Only one of this server and the backend at {origin} has a database, so "
+        "they use different data directories. Point both at the same DATA_DIR."
     )
 
 
@@ -103,8 +122,15 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         frontend is reachable, and render_path_ok: true when the backend that
         serves the print page uses this server's database, false when it is
         unreachable or uses another database, "unknown" when it cannot be
-        determined (for example, no resumes stored yet).
+        determined (neither database created yet, or an older backend).
         """
+        # Checked first: reading the LLM config or stats creates the database.
+        local_established = False
+        try:
+            local_established = database_established()
+        except OSError:
+            logger.exception("MCP status: data directory unavailable")
+
         llm_configured = False
         llm_provider: str | None = None
         llm_model: str | None = None
@@ -128,21 +154,18 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
 
         origin = print_data_origin()
         frontend_url = settings.frontend_base_url.rstrip("/")
-        (backend_reachable, remote_id), frontend_reachable = await asyncio.gather(
+        probe, frontend_reachable = await asyncio.gather(
             _probe_backend(origin), _probe_frontend(frontend_url)
         )
+        render_path_ok: RenderPathOk
         local_id: str | None = None
         try:
-            local_id = get_db_instance_id()
+            local_id = get_db_instance_id(create=local_established)
+            render_path_ok, render_path_detail = _render_path(probe, local_id, origin)
         except OSError:
             logger.exception("MCP status: database instance id unavailable")
-        render_path_ok, render_path_detail = _render_path(
-            backend_reachable,
-            remote_id,
-            local_id,
-            int(stats.get("total_resumes", 0)),
-            origin,
-        )
+            render_path_ok = "unknown"
+            render_path_detail = "This server's database instance id is unavailable."
         return {
             "llm_configured": llm_configured,
             "llm_provider": llm_provider,
@@ -168,12 +191,15 @@ def register_task_tools(server: MCPServer, runtime: MCPRuntime) -> None:
         """Poll a long-running operation started by another tool.
 
         status is running, succeeded (result included), failed (error
-        included) or cancelled. Finished tasks are kept for one hour.
+        included) or cancelled. Finished tasks are kept for one hour. Large
+        payloads (a PDF's content_base64) are returned once and then released.
         """
         record = runtime.tasks.get(task_id)
         if record is None:
             raise ToolError("Unknown or expired task_id.")
-        return record.to_dict()
+        payload = record.to_dict()
+        record.mark_delivered()
+        return payload
 
     @server.tool()
     async def cancel_task(
@@ -183,5 +209,7 @@ def register_task_tools(server: MCPServer, runtime: MCPRuntime) -> None:
         record = runtime.tasks.cancel(task_id)
         if record is None:
             raise ToolError("Unknown or expired task_id.")
-        settled = await runtime.tasks.wait(task_id, 1.0)
-        return (settled or record).to_dict()
+        settled = await runtime.tasks.wait(task_id, 1.0) or record
+        payload = settled.to_dict()
+        settled.mark_delivered()
+        return payload
