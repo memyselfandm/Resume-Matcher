@@ -90,8 +90,24 @@ class StdioServer:
             assert message.get("jsonrpc") == "2.0", line
 
 
+async def seed_resume(data_dir: Path) -> str:
+    """Store a resume in the child's data directory before it starts."""
+    from app.database import Database
+
+    database = Database(db_path=data_dir / "resume_matcher.db")
+    try:
+        resume = await database.create_resume(
+            content="# Jane Doe\nBackend engineer", processing_status="ready", is_master=True
+        )
+    finally:
+        await database.close()
+    return resume["resume_id"]
+
+
 async def test_modern_client_discovers_and_calls_tools(tmp_path: Path) -> None:
-    server = await StdioServer.start(tmp_path / "data", tmp_path)
+    data_dir = tmp_path / "data"
+    resume_id = await seed_resume(data_dir)
+    server = await StdioServer.start(data_dir, tmp_path)
     try:
         discover = await server.request(1, "server/discover", {"_meta": ENVELOPE})
         listed = await server.request(2, "tools/list", {"_meta": ENVELOPE})
@@ -101,6 +117,14 @@ async def test_modern_client_discovers_and_calls_tools(tmp_path: Path) -> None:
             {"_meta": ENVELOPE, "name": "list_resumes", "arguments": {}},
         )
         missing = await server.request(4, "resources/read", {"_meta": ENVELOPE, "uri": "resume://missing"})
+        resource = await server.request(
+            5, "resources/read", {"_meta": ENVELOPE, "uri": f"resume://{resume_id}"}
+        )
+        tool_error = await server.request(
+            6,
+            "tools/call",
+            {"_meta": ENVELOPE, "name": "get_resume", "arguments": {"resume_id": "missing"}},
+        )
     finally:
         code, stderr = await server.close()
 
@@ -108,7 +132,7 @@ async def test_modern_client_discovers_and_calls_tools(tmp_path: Path) -> None:
     server.assert_stdout_is_jsonrpc()
 
     assert MODERN in discover["result"]["supportedVersions"]
-    for response in (discover, listed, called):
+    for response in (discover, listed, called, resource, tool_error):
         assert response["result"]["resultType"] == "complete"
 
     tools = listed["result"]
@@ -119,7 +143,14 @@ async def test_modern_client_discovers_and_calls_tools(tmp_path: Path) -> None:
     assert "tailor_resume_confirm" in names
 
     assert called["result"]["isError"] is False
-    assert json.loads(called["result"]["content"][0]["text"]) == {"resumes": []}
+    listed_resumes = json.loads(called["result"]["content"][0]["text"])["resumes"]
+    assert [item["resume_id"] for item in listed_resumes] == [resume_id]
+
+    assert resource["result"]["ttlMs"] == 0
+    assert resource["result"]["contents"][0]["text"].startswith("# Jane Doe")
+
+    assert tool_error["result"]["isError"] is True
+    assert "Resume not found" in tool_error["result"]["content"][0]["text"]
 
     assert missing["error"]["code"] == -32602
 

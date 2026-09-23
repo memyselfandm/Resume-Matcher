@@ -259,6 +259,20 @@
           "description": "preview_id from tailor_resume_preview.",
           "title": "Preview Id",
           "type": "string"
+        },
+        "wait_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds to wait for completion before returning a task_id to poll with get_task. Defaults: 200 (stdio), 45 (HTTP).",
+          "title": "Wait Seconds"
         }
       },
       "required": [

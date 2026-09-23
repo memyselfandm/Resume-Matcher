@@ -14,6 +14,8 @@ import asyncio
 import base64
 import copy
 import json
+import logging
+import textwrap
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from pathlib import Path
@@ -31,22 +33,35 @@ from mcp_types import CallToolResult
 from app.database import Database
 from app.instance_id import get_db_instance_id
 from app.main import app
-from app.mcp.bridge import MAX_UPLOAD_BYTES
+from app.mcp.bridge import MAX_UPLOAD_BYTES, AppBridge
 from app.mcp.runtime import MCPRuntime
 from app.mcp.server import build_mcp_server
-from app.schemas.models import ResumeData
+from app.schemas.models import InterviewPrepData, InterviewPrepQuestion, ResumeData
 
 SNAPSHOT_PATH = Path(__file__).parent / "snapshots" / "mcp_tools.json"
 MODERN = "2026-07-28"
 FORBIDDEN_TOOL_FRAGMENTS = ("delete", "reset", "api_key", "config")
 
 
+class RecordingApp:
+    """ASGI wrapper recording every HTTP path dispatched to the real app."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.paths: list[str] = []
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] == "http":
+            self.paths.append(scope["path"])
+        await self.inner(scope, receive, send)
+
+
 @asynccontextmanager
 async def mcp_session(
-    transport: str = "stdio", mode: str = MODERN
+    transport: str = "stdio", mode: str = MODERN, asgi_app: Any = app
 ) -> AsyncIterator[tuple[Client, MCPRuntime]]:
     """Connect an in-process SDK client to a freshly built server."""
-    runtime = MCPRuntime.create(app, transport=transport)  # type: ignore[arg-type]
+    runtime = MCPRuntime(bridge=AppBridge(asgi_app), transport=transport)  # type: ignore[arg-type]
     server = build_mcp_server(runtime)
     try:
         async with Client(server, mode=mode, cache=None) as client:
@@ -277,6 +292,7 @@ class TestTailoringFlow:
                 confirmed = await client.call_tool("tailor_resume_confirm", {"preview_id": preview_id})
             assert confirmed.is_error is False, confirmed.content
             confirm_body = payload(confirmed)
+            assert confirm_body["status"] == "succeeded"
 
             tailored_id = confirm_body["tailored_resume_id"]
             fetched = payload(
@@ -298,8 +314,36 @@ class TestTailoringFlow:
         ]
         assert len(cards) == 1
         assert confirm_body["application_id"] == cards[0]["application_id"]
-        # The preview handle is consumed by a successful confirm.
-        assert runtime.previews.get(preview_id) is None
+        # The preview handle stays valid so a retry can replay the result.
+        assert runtime.previews.get(preview_id) is not None
+
+    async def test_confirm_retry_replays_same_result(
+        self, isolated_db: Database, sample_resume: dict[str, Any]
+    ) -> None:
+        improved = tailored_resume(sample_resume)
+        async with mcp_session() as (client, _):
+            resume_id, job_id = await upload_and_add_job(
+                client, sample_resume, "Senior Backend Engineer: Python, FastAPI."
+            )
+            with mocked_tailoring(improved):
+                preview_id = payload(
+                    await client.call_tool(
+                        "tailor_resume_preview", {"resume_id": resume_id, "job_id": job_id}
+                    )
+                )["preview_id"]
+                first = payload(await client.call_tool("tailor_resume_confirm", {"preview_id": preview_id}))
+                second = payload(await client.call_tool("tailor_resume_confirm", {"preview_id": preview_id}))
+
+        assert second["tailored_resume_id"] == first["tailored_resume_id"]
+        assert second["application_id"] == first["application_id"]
+        stats = await isolated_db.get_stats()
+        assert stats["total_resumes"] == 2
+        cards = [
+            card
+            for card in await isolated_db.list_applications()
+            if card["resume_id"] == first["tailored_resume_id"]
+        ]
+        assert len(cards) == 1
 
     async def test_preview_cache_miss_is_tool_error(self, isolated_db: Database) -> None:
         async with mcp_session() as (client, _):
@@ -352,19 +396,67 @@ class TestErrorMapping:
         assert "Resume not found" in text
         assert_no_internals(text)
 
-    async def test_unhandled_router_exception_is_generic(
-        self, isolated_db: Database, monkeypatch: pytest.MonkeyPatch
+    async def test_unhandled_router_exception_is_generic_and_logged(
+        self,
+        isolated_db: Database,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         async def explode(job_id: str) -> None:
             raise RuntimeError("sqlite at /private/data/secret.db is corrupt")
 
         monkeypatch.setattr(isolated_db, "get_job", explode)
-        async with mcp_session() as (client, _):
-            result = await client.call_tool("get_job", {"job_id": "any"})
+        with caplog.at_level(logging.ERROR, logger="app.mcp.bridge"):
+            async with mcp_session() as (client, _):
+                result = await client.call_tool("get_job", {"job_id": "any"})
         text = error_text(result)
         assert "failed to complete the request" in text
         assert "secret" not in text
         assert_no_internals(text)
+        logged = [r for r in caplog.records if r.name == "app.mcp.bridge" and r.exc_info]
+        assert len(logged) == 1
+        assert "GET /api/v1/jobs/any" in logged[0].getMessage()
+        assert "secret.db is corrupt" in str(logged[0].exc_info[1])
+
+
+UNSAFE_IDS = ["../applications/bulk", "..%2F", "x?y=1", "x#y", "a/b", "", "x" * 129]
+ID_TOOLS: list[tuple[str, dict[str, Any]]] = [
+    ("get_resume", {}),
+    ("update_resume", {"resume_data": {}}),
+    ("set_resume_title", {"title": "x"}),
+    ("generate_cover_letter", {}),
+    ("generate_outreach", {}),
+    ("generate_interview_prep", {}),
+    ("export_resume_pdf", {}),
+]
+
+
+class TestPathInjection:
+    @pytest.mark.parametrize("bad_id", UNSAFE_IDS)
+    async def test_unsafe_ids_never_reach_the_app(self, isolated_db: Database, bad_id: str) -> None:
+        recorder = RecordingApp(app)
+        calls = [(name, {"resume_id": bad_id, **extra}) for name, extra in ID_TOOLS]
+        calls += [
+            ("get_job", {"job_id": bad_id}),
+            ("update_application", {"application_id": bad_id, "notes": "x"}),
+        ]
+        async with mcp_session(asgi_app=recorder) as (client, _):
+            for name, arguments in calls:
+                result = await client.call_tool(name, arguments)
+                text = error_text(result)
+                assert "Invalid" in text, (name, text)
+            for uri in (f"resume://{bad_id}", f"job://{bad_id}"):
+                with pytest.raises(MCPError) as caught:
+                    await client.read_resource(uri)
+                assert caught.value.error.code == -32602
+        assert recorder.paths == []
+
+    async def test_valid_ids_still_dispatch(self, isolated_db: Database) -> None:
+        recorder = RecordingApp(app)
+        async with mcp_session(asgi_app=recorder) as (client, _):
+            result = await client.call_tool("get_job", {"job_id": "3f1c2a9e-6b1d-4c3e-9a57-0e2f8b6d4c11"})
+        assert "Job not found" in error_text(result)
+        assert recorder.paths == ["/api/v1/jobs/3f1c2a9e-6b1d-4c3e-9a57-0e2f8b6d4c11"]
 
 
 class TestUploadGuards:
@@ -416,6 +508,20 @@ class TestUploadGuards:
         assert body["processing_status"] == "ready"
         assert await isolated_db.get_resume(body["resume_id"]) is not None
 
+    async def test_line_wrapped_base64_is_accepted(
+        self, isolated_db: Database, sample_resume: dict[str, Any]
+    ) -> None:
+        encoded = base64.b64encode(b"%PDF-1.4 " + b"x" * 300).decode()
+        wrapped = "\n".join(textwrap.wrap(encoded, 76)) + "\n"
+        assert "\n" in wrapped.strip()
+        async with mcp_session() as (client, _):
+            with mocked_upload_parsing(sample_resume) as parse_document:
+                result = await client.call_tool(
+                    "upload_resume", {"filename": "resume.pdf", "content_base64": wrapped}
+                )
+        assert payload(result)["processing_status"] == "ready"
+        assert parse_document.await_args.args[0] == b"%PDF-1.4 " + b"x" * 300
+
     async def test_local_path_upload_refused_on_http(self, isolated_db: Database, tmp_path: Path) -> None:
         resume_file = tmp_path / "resume.pdf"
         resume_file.write_bytes(b"%PDF-1.4 fake")
@@ -453,6 +559,18 @@ async def seed_resume(db: Database) -> None:
     await db.create_resume(content="# Jane Doe", processing_status="ready", is_master=True)
 
 
+async def real_health(monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> dict[str, Any]:
+    """Call the real /health route as a backend running on ``data_dir``."""
+    from app.config import settings
+
+    with monkeypatch.context() as patched:
+        patched.setattr(settings, "data_dir", data_dir)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://backend"
+        ) as backend:
+            return (await backend.get("/api/v1/health")).json()
+
+
 class TestGetStatus:
     async def test_configured_key_triggers_no_llm_calls(self, isolated_db: Database) -> None:
         from app.config import save_api_keys_to_config
@@ -476,26 +594,44 @@ class TestGetStatus:
         assert status["frontend"]["reachable"] is True
 
     async def test_render_path_unknown_when_both_databases_empty(
-        self, isolated_db: Database, tmp_path: Path
+        self, isolated_db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        other = {"status": "healthy", "db_instance_id": get_db_instance_id(tmp_path / "other-data")}
-        with probe_mocks(other):
+        # Neither this process's data dir nor the backend's holds a database.
+        health = await real_health(monkeypatch, tmp_path / "empty-backend-data")
+        assert health["db_instance_id"] is None
+        with probe_mocks(health):
             async with mcp_session() as (client, _):
                 status = payload(await client.call_tool("get_status", {}))
-        assert status["database"]["total_resumes"] == 0
         assert status["render_path_ok"] == "unknown"
         assert status["pdf_export_ready"] is False
 
     async def test_render_path_false_for_different_data_dir(
-        self, isolated_db: Database, tmp_path: Path
+        self, isolated_db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        other_dir = tmp_path / "other-data"
+        other_db = Database(db_path=other_dir / "resume_matcher.db")
+        await other_db.get_stats()  # establish the other backend's database
+        await other_db.close()
+        health = await real_health(monkeypatch, other_dir)
+        assert health["db_instance_id"]
+        await isolated_db.get_stats()  # establish this (still empty) database
+        with probe_mocks(health):
+            async with mcp_session() as (client, _):
+                status = payload(await client.call_tool("get_status", {}))
+        # Both ids exist and differ: false even though this database is empty.
+        assert status["database"]["total_resumes"] == 0
+        assert status["render_path_ok"] is False
+        assert "different data directory" in status["render_path_detail"]
+
+    async def test_render_path_false_when_only_one_side_has_a_database(
+        self, isolated_db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         await seed_resume(isolated_db)
-        other = {"status": "healthy", "db_instance_id": get_db_instance_id(tmp_path / "other-data")}
-        with probe_mocks(other):
+        health = await real_health(monkeypatch, tmp_path / "empty-backend-data")
+        with probe_mocks(health):
             async with mcp_session() as (client, _):
                 status = payload(await client.call_tool("get_status", {}))
         assert status["render_path_ok"] is False
-        assert "different data directory" in status["render_path_detail"]
 
     async def test_render_path_true_for_same_data_dir(self, isolated_db: Database) -> None:
         await seed_resume(isolated_db)
@@ -510,6 +646,15 @@ class TestGetStatus:
         assert status["render_path_ok"] is True
         assert status["db_instance_id"] == health["db_instance_id"]
         assert status["pdf_export_ready"] is True
+
+    async def test_render_path_unknown_for_backend_without_instance_id(
+        self, isolated_db: Database
+    ) -> None:
+        await seed_resume(isolated_db)
+        with probe_mocks({"status": "healthy"}):
+            async with mcp_session() as (client, _):
+                status = payload(await client.call_tool("get_status", {}))
+        assert status["render_path_ok"] == "unknown"
 
     async def test_render_path_false_when_backend_unreachable(self, isolated_db: Database) -> None:
         await seed_resume(isolated_db)
@@ -527,11 +672,154 @@ class TestHealthInstanceId:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://backend"
         ) as backend:
+            before = (await backend.get("/api/v1/health")).json()
+            await seed_resume(isolated_db)
             first = (await backend.get("/api/v1/health")).json()
             second = (await backend.get("/api/v1/health")).json()
+        assert before == {"status": "healthy", "db_instance_id": None}
         assert first["status"] == "healthy"
         assert first["db_instance_id"] == second["db_instance_id"]
         assert (settings.data_dir / "instance_id").read_text() == first["db_instance_id"]
+
+
+async def create_tailored_resume(
+    client: Client, sample_resume: dict[str, Any]
+) -> dict[str, Any]:
+    """Run upload -> add_jobs -> preview -> confirm and return the confirm body."""
+    resume_id, job_id = await upload_and_add_job(
+        client, sample_resume, "Senior Backend Engineer: Python, FastAPI."
+    )
+    with mocked_tailoring(tailored_resume(sample_resume)):
+        preview_id = payload(
+            await client.call_tool("tailor_resume_preview", {"resume_id": resume_id, "job_id": job_id})
+        )["preview_id"]
+        return payload(await client.call_tool("tailor_resume_confirm", {"preview_id": preview_id}))
+
+
+class TestDocumentTools:
+    async def test_generators_save_content_for_tailored_resume(
+        self, isolated_db: Database, sample_resume: dict[str, Any]
+    ) -> None:
+        prep = InterviewPrepData(
+            role_fit_analysis=["Strong API background"],
+            resume_questions=[InterviewPrepQuestion(question="Describe the migration.")],
+            project_follow_ups=[],
+            skill_gaps=[],
+            talking_points=["Throughput gains"],
+        )
+        async with mcp_session() as (client, _):
+            tailored_id = (await create_tailored_resume(client, sample_resume))["tailored_resume_id"]
+            with (
+                patch("app.routers.resumes.generate_cover_letter", new_callable=AsyncMock, return_value="Dear team"),
+                patch("app.routers.resumes.generate_outreach_message", new_callable=AsyncMock, return_value="Hi there"),
+                patch("app.routers.resumes.generate_interview_prep", new_callable=AsyncMock, return_value=prep),
+            ):
+                cover = payload(await client.call_tool("generate_cover_letter", {"resume_id": tailored_id}))
+                outreach = payload(await client.call_tool("generate_outreach", {"resume_id": tailored_id}))
+                interview = payload(await client.call_tool("generate_interview_prep", {"resume_id": tailored_id}))
+
+        assert cover["status"] == "succeeded" and cover["cover_letter"] == "Dear team"
+        assert outreach["outreach_message"] == "Hi there"
+        assert interview["interview_prep"]["talking_points"] == ["Throughput gains"]
+        stored = await isolated_db.get_resume(tailored_id)
+        assert stored["cover_letter"] == "Dear team"
+        assert stored["outreach_message"] == "Hi there"
+        assert json.loads(stored["interview_prep"])["role_fit_analysis"] == ["Strong API background"]
+
+    async def test_export_pdf_to_file_and_base64(
+        self, isolated_db: Database, sample_resume: dict[str, Any], tmp_path: Path
+    ) -> None:
+        pdf = b"%PDF-1.7 rendered"
+        out_file = tmp_path / "cv.pdf"
+        async with mcp_session() as (client, _):
+            with mocked_upload_parsing(sample_resume):
+                resume_id = payload(
+                    await client.call_tool(
+                        "upload_resume",
+                        {"filename": "r.pdf", "content_base64": base64.b64encode(b"%PDF-1.4").decode()},
+                    )
+                )["resume_id"]
+            with patch("app.routers.resumes.render_resume_pdf", new_callable=AsyncMock, return_value=pdf) as render:
+                to_file = payload(
+                    await client.call_tool(
+                        "export_resume_pdf",
+                        {"resume_id": resume_id, "template": "modern", "out_path": str(out_file)},
+                    )
+                )
+                inline = payload(await client.call_tool("export_resume_pdf", {"resume_id": resume_id}))
+
+        assert to_file["path"] == str(out_file) and "content_base64" not in to_file
+        assert out_file.read_bytes() == pdf
+        assert base64.b64decode(inline["content_base64"]) == pdf
+        first_url = render.await_args_list[0].args[0]
+        assert f"/print/resumes/{resume_id}?template=modern" in first_url
+
+    async def test_polled_pdf_payload_is_returned_once(
+        self, isolated_db: Database, sample_resume: dict[str, Any]
+    ) -> None:
+        pdf = b"%PDF-1.7 rendered"
+        async with mcp_session() as (client, _):
+            with mocked_upload_parsing(sample_resume):
+                resume_id = payload(
+                    await client.call_tool(
+                        "upload_resume",
+                        {"filename": "r.pdf", "content_base64": base64.b64encode(b"%PDF-1.4").decode()},
+                    )
+                )["resume_id"]
+
+            async def slow_render(*args: Any, **kwargs: Any) -> bytes:
+                await asyncio.sleep(0.3)
+                return pdf
+
+            with patch("app.routers.resumes.render_resume_pdf", slow_render):
+                started = payload(
+                    await client.call_tool("export_resume_pdf", {"resume_id": resume_id, "wait_seconds": 0})
+                )
+                assert started["status"] == "running"
+                first = await poll_task(client, started["task_id"])
+            second = payload(await client.call_tool("get_task", {"task_id": started["task_id"]}))
+        assert base64.b64decode(first["result"]["content_base64"]) == pdf
+        assert second["status"] == "succeeded"
+        assert "content_base64" not in second["result"]
+        assert second["result"]["payload_released"] is True
+
+
+class TestTrackerTools:
+    async def test_create_list_and_update_application(
+        self, isolated_db: Database, sample_resume: dict[str, Any]
+    ) -> None:
+        async with mcp_session() as (client, _):
+            resume_id, _ = await upload_and_add_job(client, sample_resume, "Backend role.")
+            created = payload(
+                await client.call_tool(
+                    "create_application",
+                    {
+                        "resume_id": resume_id,
+                        "job_description": "Platform engineer at Initech.",
+                        "company": "Initech",
+                        "role": "Platform Engineer",
+                        "status": "saved",
+                    },
+                )
+            )
+            application_id = created["application_id"]
+            saved = payload(await client.call_tool("list_applications", {"status": "saved"}))
+            updated = payload(
+                await client.call_tool(
+                    "update_application",
+                    {"application_id": application_id, "status": "interview", "notes": "Phone screen"},
+                )
+            )
+            board = payload(await client.call_tool("list_applications", {}))
+
+        assert created["company"] == "Initech" and created["status"] == "saved"
+        assert [card["application_id"] for card in saved["columns"]["saved"]] == [application_id]
+        assert saved["total"] == 1
+        assert updated["status"] == "interview" and updated["notes"] == "Phone screen"
+        assert [card["application_id"] for card in board["columns"]["interview"]] == [application_id]
+        stored = await isolated_db.get_application(application_id)
+        assert stored["status"] == "interview"
+        assert stored["notes"] == "Phone screen"
 
 
 class TestTaskTools:
