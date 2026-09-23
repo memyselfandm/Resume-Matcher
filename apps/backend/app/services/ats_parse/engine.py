@@ -20,6 +20,7 @@ from app.services.ats_parse.report import (
     CheckResult,
     Extractability,
     ParseCheckReport,
+    content_score,
     overall_score,
 )
 from app.services.parser import run_bounded_document_worker
@@ -58,6 +59,7 @@ def _unsupported_report() -> ParseCheckReport:
         extractability="unsupported_format",
         content_language=UNKNOWN_LANGUAGE,
         overall_score=None,
+        content_score=None,
         checks=[check],
         profiles=[],
         extracted_text_preview="",
@@ -97,6 +99,7 @@ def build_report(
         extractability=_extractability(checks),
         content_language=language,
         overall_score=overall_score(checks),
+        content_score=content_score(checks),
         checks=checks,
         profiles=score_profiles(checks, detected_sections(document.text, render_locale)),
         extracted_text_preview=document.text[:EXTRACTED_TEXT_PREVIEW_CHARS],
