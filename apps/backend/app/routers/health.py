@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter
 
 from app.database import db
+from app.instance_id import get_db_instance_id
 from app.llm import check_llm_health, get_llm_config
 from app.schemas import HealthResponse, StatusResponse
 
@@ -27,8 +28,15 @@ async def health_check() -> HealthResponse:
     """Lightweight liveness check for Docker HEALTHCHECK.
 
     Does NOT call the LLM provider. Use GET /status for full LLM health.
+    Also reports the data directory's ``db_instance_id`` so local tools (the
+    MCP stdio server) can verify they share storage with this backend.
     """
-    return HealthResponse(status="healthy")
+    db_instance_id: str | None = None
+    try:
+        db_instance_id = get_db_instance_id()
+    except OSError:
+        logger.exception("Health: database instance id unavailable")
+    return HealthResponse(status="healthy", db_instance_id=db_instance_id)
 
 
 @router.get("/status", response_model=StatusResponse)
