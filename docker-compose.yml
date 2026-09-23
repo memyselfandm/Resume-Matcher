@@ -33,10 +33,72 @@ services:
       #- CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
     restart: unless-stopped
 
+  # ------------------------------------------------------------------
+  # Optional PostgreSQL backend (profile "postgres"). The default
+  # `docker compose up` is unchanged. Run the PostgreSQL pair only with:
+  #   docker compose --profile postgres up resume-matcher-postgres
+  # (`docker compose --profile postgres up` also starts the default
+  # SQLite service; the PostgreSQL app then listens on POSTGRES_APP_PORT.)
+  # Move existing SQLite data with app.scripts.migrate_sqlite_to_postgres.
+  # ------------------------------------------------------------------
+  postgres:
+    image: postgres:17
+    profiles: ["postgres"]
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-resume_matcher}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-resume_matcher}
+      - POSTGRES_DB=${POSTGRES_DB:-resume_matcher}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  resume-matcher-postgres:
+    profiles: ["postgres"]
+    image: resume-matcher-postgres:local
+    # The published image installs only the default dependencies; this layer
+    # adds the backend's `postgres` extra on top of the resume-matcher image.
+    build:
+      context: .
+      additional_contexts:
+        app: service:resume-matcher
+      dockerfile_inline: |
+        FROM app
+        USER root
+        RUN cd /app/backend && pip install --no-cache-dir ".[postgres]"
+        USER appuser
+    container_name: resume-matcher-postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${POSTGRES_APP_PORT:-3001}:3000"
+    volumes:
+      # config.json and the .secret_key that decrypts stored API keys.
+      - resume-data-postgres:/app/backend/data
+    environment:
+      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-resume_matcher}:${POSTGRES_PASSWORD:-resume_matcher}@postgres:5432/${POSTGRES_DB:-resume_matcher}
+      - FRONTEND_BASE_URL=${FRONTEND_BASE_URL:-http://localhost:3000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_LLM=${LOG_LLM:-WARNING}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_API_BASE=${LLM_API_BASE:-}
+    restart: unless-stopped
+
 #secrets:
 #  llm_api_key:
 #    file: ./secrets/llm_api_key
 
 volumes:
   resume-data:
+    driver: local
+  resume-data-postgres:
+    driver: local
+  postgres-data:
     driver: local
