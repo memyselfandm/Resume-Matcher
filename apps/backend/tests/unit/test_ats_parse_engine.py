@@ -79,7 +79,7 @@ class TestColumnDetection:
         # Row reconstruction keeps the right-aligned date on its title row.
         assert "Senior Software Engineer Jan 2021 - Present" in report.extracted_text_preview
 
-    def test_swiss_two_column_geometry_fails_multi_column_and_sidebar(self) -> None:
+    def test_swiss_two_column_geometry_fails_multi_column_once(self) -> None:
         report = _report("two_column.pdf")
         multi_column = _check(report, "multi_column")
         assert multi_column.status == "fail"
@@ -88,9 +88,14 @@ class TestColumnDetection:
         assert evidence["height_ratio"] >= 0.4
         # The band sits between the 65% main column and the 35% sidebar.
         assert 370 <= evidence["gutter_x0"] <= 392
+        # The narrow right column is the same defect: reported once, not twice.
         sidebar = _check(report, "sidebar")
-        assert sidebar.status == "fail"
-        assert sidebar.evidence["pages"][0]["side"] == "right"
+        assert sidebar.status == "not_applicable"
+        assert sidebar.params == {
+            "pages": [],
+            "suppressed_pages": [1],
+            "reason": "covered_by_multi_column",
+        }
 
     def test_balanced_two_column_is_multi_column_but_not_sidebar(self) -> None:
         report = _report("balanced_two_column.pdf")

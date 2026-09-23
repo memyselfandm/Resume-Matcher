@@ -776,19 +776,23 @@ async def run_bounded_document_worker(
     func: Callable[..., T],
     *args: Any,
     timeout_seconds: float,
+    limiter: anyio.CapacityLimiter | None = None,
+    label: str = "Document conversion",
 ) -> T:
-    """Run blocking document work under the shared limiter and a hard deadline.
+    """Run blocking document work under a capacity limiter and a hard deadline.
 
-    Conversions and parse checks share one capacity limiter so untrusted
-    documents never occupy more than ``DOCUMENT_CONVERSION_WORKERS`` threads.
-    The caller's deadline covers both queueing and execution.
+    ``limiter`` defaults to the upload conversion limiter; other document
+    features pass their own so they cannot starve resume uploads. The
+    caller's deadline covers both queueing and execution. ``label`` names the
+    work in logs about workers that outlive their caller.
     """
+    admission = limiter or _DOCUMENT_CONVERSION_LIMITER
     deadline = asyncio.get_running_loop().time() + timeout_seconds
     borrower = object()
     # Queued requests still belong to their caller. Only an admitted conversion
     # can outlive cancellation; abandoned queues never retain file bytes or run.
     await asyncio.wait_for(
-        _DOCUMENT_CONVERSION_LIMITER.acquire_on_behalf_of(borrower),
+        admission.acquire_on_behalf_of(borrower),
         timeout=timeout_seconds,
     )
 
@@ -798,7 +802,7 @@ async def run_bounded_document_worker(
                 func, *args, abandon_on_cancel=False
             )
         finally:
-            _DOCUMENT_CONVERSION_LIMITER.release_on_behalf_of(borrower)
+            admission.release_on_behalf_of(borrower)
 
     worker = asyncio.create_task(run_admitted_worker())
     try:
@@ -817,9 +821,7 @@ async def run_bounded_document_worker(
                 try:
                     done.result()
                 except Exception:
-                    logger.exception(
-                        "Document conversion failed after request cancellation"
-                    )
+                    logger.exception("%s failed after request cancellation", label)
 
         worker.add_done_callback(consume_result)
         raise
