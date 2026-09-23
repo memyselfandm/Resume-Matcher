@@ -102,7 +102,7 @@ network by default, so normal test runs do not read or overwrite developer setti
 ## API Endpoints Quick Ref
 
 ```
-GET  /api/v1/health              # liveness probe (no LLM call)
+GET  /api/v1/health              # liveness probe (no LLM call) + db_instance_id
 GET  /api/v1/status              # Full status (LLM + DB isolated; 200 on partial failure)
 GET/PUT /api/v1/config/llm-api-key            # no longer persists a key
 GET/POST/DELETE /api/v1/config/api-keys       # per-provider encrypted keys

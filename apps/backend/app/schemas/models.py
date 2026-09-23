@@ -869,6 +869,7 @@ class HealthResponse(BaseModel):
     """Health check response."""
 
     status: str
+    db_instance_id: str | None = None
 
 
 class StatusResponse(BaseModel):
