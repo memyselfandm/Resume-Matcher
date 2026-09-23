@@ -8,9 +8,9 @@ import re
 import tempfile
 import zipfile
 import zlib
-from pathlib import Path
 from collections.abc import Callable
-from typing import Any, BinaryIO, Sequence, TypeVar
+from pathlib import Path
+from typing import Any, BinaryIO, Sequence
 
 import anyio
 from markitdown import MarkItDown
@@ -46,8 +46,6 @@ from app.prompts.templates import RESUME_SCHEMA_EXAMPLE
 from app.schemas import ResumeData
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
 
 DOCUMENT_IO_CHUNK_SIZE = 64 * 1024
 MAX_DOCX_MEMBERS = 1_024
@@ -772,7 +770,7 @@ def _validate_parsed_resume(result: dict[str, Any]) -> dict[str, Any]:
     return parsed_data
 
 
-async def run_bounded_document_worker(
+async def run_bounded_document_worker[T](
     func: Callable[..., T],
     *args: Any,
     timeout_seconds: float,

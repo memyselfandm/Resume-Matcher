@@ -423,4 +423,3 @@ def detected_sections(text: str, render_locale: str | None = None) -> list[str]:
     if has_email(text) or has_phone(text):
         sections.insert(0, "contact")
     return sections
-
