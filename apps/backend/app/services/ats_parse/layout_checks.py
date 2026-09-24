@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from app.services.ats_parse.content_checks import has_email, has_phone
 from app.services.ats_parse.extract import (
     MAX_ANALYZED_PAGES,
+    MAX_DOCUMENT_CHARS,
     MAX_EXTRACTED_CHARS,
     MAX_LINES_PER_PAGE,
     MAX_PAGE_CHARS,
@@ -558,7 +559,11 @@ def run_layout_checks(
                 "chars_truncated": document.truncated_chars,
                 "dense_pages": list(document.dense_pages),
                 "page_limit": MAX_ANALYZED_PAGES,
-                "char_limit": MAX_EXTRACTED_CHARS,
+                # PDFs stop interpreting at the document-wide character
+                # budget; DOCX text fields are each capped at extraction.
+                "char_limit": MAX_DOCUMENT_CHARS
+                if document.file_format == "pdf"
+                else MAX_EXTRACTED_CHARS,
                 "page_char_limit": MAX_PAGE_CHARS,
                 "page_line_limit": MAX_LINES_PER_PAGE,
             },

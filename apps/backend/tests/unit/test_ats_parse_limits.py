@@ -257,3 +257,23 @@ def test_single_dense_page_is_partial_not_missing_text_layer(
     assert checks["truncated"].params["dense_pages"] == [1]
     assert report.overall_score is not None and report.overall_score > 10
     assert "too dense: 1" in render_message(checks["truncated"])
+
+
+def test_unread_dense_document_score_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Zero analyzed characters must not look like a clean, parseable document."""
+    monkeypatch.setattr(extract_module, "MAX_PAGE_CHARS", 500)
+    report = check_document_sync(_dense_pdf(600), "dense.pdf")
+    assert report.extractability == "partial"
+    assert report.overall_score is not None
+    assert 10 < report.overall_score <= engine.UNREAD_DOCUMENT_SCORE_CAP
+
+
+def test_truncated_message_quotes_the_pdf_document_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PDFs stop at the document-wide character budget, not the text cap."""
+    monkeypatch.setattr(extract_module, "MAX_PAGE_CHARS", 500)
+    report = check_document_sync(_dense_pdf(600), "dense.pdf")
+    truncated = next(check for check in report.checks if check.id == "truncated")
+    assert truncated.params["char_limit"] == extract_module.MAX_DOCUMENT_CHARS
+    assert f"{extract_module.MAX_DOCUMENT_CHARS} characters" in render_message(truncated)

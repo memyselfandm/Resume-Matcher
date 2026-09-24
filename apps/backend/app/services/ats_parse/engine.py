@@ -17,6 +17,7 @@ from app.services.ats_parse.layout_checks import has_text_layer, run_layout_chec
 from app.services.ats_parse.profiles import score_profiles
 from app.services.ats_parse.report import (
     EXTRACTED_TEXT_PREVIEW_CHARS,
+    UNREAD_DOCUMENT_SCORE_CAP,
     CheckResult,
     Extractability,
     ParseCheckReport,
@@ -94,11 +95,16 @@ def build_report(
             has_text=text_layer,
         ),
     ]
+    score = overall_score(checks)
+    if not text_layer and document.dense_pages:
+        # Every analyzed page was skipped as too dense: the score would only
+        # reflect checks that had nothing to look at.
+        score = min(score, UNREAD_DOCUMENT_SCORE_CAP)
     return ParseCheckReport(
         file_format=document.file_format,
         extractability=_extractability(checks),
         content_language=language,
-        overall_score=overall_score(checks),
+        overall_score=score,
         content_score=content_score(checks),
         checks=checks,
         profiles=score_profiles(checks, detected_sections(document.text, render_locale)),
