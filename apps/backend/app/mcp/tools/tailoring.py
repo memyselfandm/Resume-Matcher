@@ -125,8 +125,8 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         Creates the tailored resume (parent_id = source resume) and its
         tracker card. Returns tailored_resume_id and application_id; update
         the card with update_application rather than creating another.
-        Retrying with the same preview_id returns the same result. May return
-        status=running with a task_id.
+        Retrying with the same preview_id returns the same result, or the
+        same running task_id while the first attempt is still in progress.
         """
         preview = runtime.previews.get(preview_id)
         if preview is None:
@@ -161,5 +161,9 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
             }
 
         return await runtime.run_long_operation(
-            "tailor_resume_confirm", operation, wait_seconds, ctx
+            "tailor_resume_confirm",
+            operation,
+            wait_seconds,
+            ctx,
+            idempotency_key=f"tailor_resume_confirm:{preview_id}",
         )
