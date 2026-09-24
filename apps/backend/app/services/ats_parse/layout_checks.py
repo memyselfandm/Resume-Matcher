@@ -517,19 +517,33 @@ def has_text_layer(document: ExtractedDocument) -> bool:
     return bool(_CID_RE.sub("", document.text).strip())
 
 
+def _text_layer_check(document: ExtractedDocument, text_layer: bool) -> CheckResult:
+    """No text is fatal only if we actually looked; pages skipped as too dense
+    to analyze say nothing about the text layer (``truncated`` reports them)."""
+    if not text_layer and document.dense_pages:
+        return CheckResult(
+            id="text_layer",
+            category="extraction",
+            severity="fatal",
+            status="not_applicable",
+            params={"reason": "dense_pages", "chars": len(document.text)},
+        )
+    return CheckResult(
+        id="text_layer",
+        category="extraction",
+        severity="fatal",
+        status="pass" if text_layer else "fail",
+        params={"chars": len(document.text)},
+    )
+
+
 def run_layout_checks(
     document: ExtractedDocument, deadline: float | None = None
 ) -> list[CheckResult]:
     """Run every extraction and layout check in a fixed order."""
     text_layer = has_text_layer(document)
     checks = [
-        CheckResult(
-            id="text_layer",
-            category="extraction",
-            severity="fatal",
-            status="pass" if text_layer else "fail",
-            params={"chars": len(document.text)},
-        ),
+        _text_layer_check(document, text_layer),
         CheckResult(
             id="truncated",
             category="extraction",

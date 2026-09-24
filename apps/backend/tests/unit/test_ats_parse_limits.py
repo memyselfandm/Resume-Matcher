@@ -26,6 +26,7 @@ from app.services.ats_parse.extract import (
     extract_document,
 )
 from app.services.ats_parse.layout_checks import find_gutters
+from app.services.ats_parse.messages_en import render_message
 
 
 def _dense_pdf(boxes: int, pages: int = 1) -> bytes:
@@ -240,3 +241,19 @@ def test_wide_mediabox_pdf_checks_quickly() -> None:
     started = time.perf_counter()
     check_document_sync(pdf, "wide.pdf")
     assert time.perf_counter() - started < 2.0
+
+
+def test_single_dense_page_is_partial_not_missing_text_layer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page skipped for density must not be reported as a scan needing OCR."""
+    monkeypatch.setattr(extract_module, "MAX_PAGE_CHARS", 500)
+    report = check_document_sync(_dense_pdf(600), "dense.pdf")
+    checks = {check.id: check for check in report.checks}
+    assert report.extractability == "partial"
+    assert checks["text_layer"].status == "not_applicable"
+    assert checks["text_layer"].params["reason"] == "dense_pages"
+    assert checks["truncated"].status == "fail"
+    assert checks["truncated"].params["dense_pages"] == [1]
+    assert report.overall_score is not None and report.overall_score > 10
+    assert "too dense: 1" in render_message(checks["truncated"])

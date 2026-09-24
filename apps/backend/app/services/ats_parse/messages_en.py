@@ -21,7 +21,8 @@ FAIL_MESSAGES: dict[str, str] = {
         "text-based PDF or run OCR."
     ),
     "truncated": (
-        "Only the first {page_limit} pages / {char_limit} characters were analyzed."
+        "Part of the document was not analyzed (limits: {page_limit} pages, "
+        "{char_limit} characters; pages skipped as too dense: {dense_pages})."
     ),
     "unmapped_glyphs": (
         "{count} glyphs extracted as (cid:NN) placeholders. The PDF font has no "
