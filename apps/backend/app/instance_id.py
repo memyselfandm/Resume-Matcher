@@ -9,7 +9,9 @@ the local one proves (or disproves) that both processes share storage.
 
 import logging
 import os
+import time
 from pathlib import Path
+from typing import Literal
 from uuid import UUID, uuid4
 
 from app.config import settings
@@ -17,8 +19,16 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 INSTANCE_ID_FILENAME = "instance_id"
+# Reads that find an empty file retry briefly before treating it as corrupt:
+# a writer using the non-atomic fallback may be between create and write.
+_EMPTY_READ_RETRIES = 3
+_EMPTY_READ_DELAY_SECONDS = 0.01
+_MAX_ATTEMPTS = 5
 
-# Ids are immutable once written, so each directory is read from disk once.
+ReadState = Literal["valid", "missing", "empty", "invalid"]
+
+# Ids are immutable once on disk, so each directory is read once. Only values
+# read back from disk are cached, never a value this process merely proposed.
 _cache: dict[Path, str] = {}
 
 
@@ -31,48 +41,67 @@ def database_established(data_dir: Path | None = None) -> bool:
     return (_directory(data_dir) / settings.sqlite_path.name).exists()
 
 
-def _read_instance_id(path: Path) -> str | None:
-    """Return the stored UUID, or None when the file is missing or invalid."""
+def _read_instance_id(path: Path) -> tuple[ReadState, str | None]:
+    """Read the id file and classify what was found."""
     try:
         value = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
-        return None
+        return "missing", None
     except ValueError:  # includes UnicodeDecodeError
         logger.warning("Ignoring undecodable database instance id in %s", path)
-        return None
+        return "invalid", None
+    if not value:
+        return "empty", None
     try:
-        return str(UUID(value))
+        return "valid", str(UUID(value))
     except ValueError:
         logger.warning("Ignoring invalid database instance id in %s", path)
-        return None
+        return "invalid", None
 
 
-def _write_new_instance_id(directory: Path, path: Path) -> str:
-    """Create the id file, converging with a concurrent creator if any."""
-    directory.mkdir(parents=True, exist_ok=True)
+def _temp_file_with_new_id(directory: Path) -> Path:
+    """Write a fresh id to a private temp file in ``directory``."""
     new_id = str(uuid4())
+    temp_path = directory / f".{INSTANCE_ID_FILENAME}.{new_id}.tmp"
+    temp_path.write_text(new_id, encoding="utf-8")
+    return temp_path
+
+
+def _create_if_absent(directory: Path, path: Path) -> None:
+    """Atomically publish a new id unless another writer already did.
+
+    ``os.link`` creates the target with its full content in one step and
+    fails if it exists, so readers never observe a partial file.
+    """
+    temp_path = _temp_file_with_new_id(directory)
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.link(temp_path, path)
     except FileExistsError:
-        concurrent = _read_instance_id(path)
-        if concurrent is not None:
-            return concurrent
-        # The existing file is corrupt: replace it atomically.
-        temp_path = directory / f".{INSTANCE_ID_FILENAME}.{new_id}.tmp"
-        temp_path.write_text(new_id, encoding="utf-8")
-        os.replace(temp_path, path)
-        return new_id
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(new_id)
-    return new_id
+        pass
+    except OSError:
+        # Filesystems without hard links: exclusive create, then write.
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            return
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(temp_path.read_text(encoding="utf-8"))
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def _replace_corrupt(directory: Path, path: Path) -> None:
+    """Atomically replace an unusable id file with a fresh id."""
+    os.replace(_temp_file_with_new_id(directory), path)
 
 
 def get_db_instance_id(data_dir: Path | None = None, *, create: bool = True) -> str | None:
     """Return the data directory's instance UUID.
 
-    With ``create`` (the default) a missing or corrupt id is (re)created, so a
-    string is always returned. Without it, only an existing valid id is
-    returned and None means "not established yet".
+    With ``create`` (the default) a missing or corrupt id is (re)created and
+    the value on disk is returned, so concurrent creators converge on one id.
+    Without it, only an existing valid id is returned and None means "not
+    established yet".
     """
     directory = _directory(data_dir)
     cached = _cache.get(directory)
@@ -80,9 +109,20 @@ def get_db_instance_id(data_dir: Path | None = None, *, create: bool = True) -> 
         return cached
 
     path = directory / INSTANCE_ID_FILENAME
-    instance_id = _read_instance_id(path)
-    if instance_id is None and create:
-        instance_id = _write_new_instance_id(directory, path)
-    if instance_id is not None:
-        _cache[directory] = instance_id
-    return instance_id
+    empty_reads = 0
+    for _ in range(_MAX_ATTEMPTS + _EMPTY_READ_RETRIES):
+        state, value = _read_instance_id(path)
+        if state == "valid" and value is not None:
+            _cache[directory] = value
+            return value
+        if not create:
+            return None
+        if state == "missing":
+            directory.mkdir(parents=True, exist_ok=True)
+            _create_if_absent(directory, path)
+        elif state == "empty" and empty_reads < _EMPTY_READ_RETRIES:
+            empty_reads += 1
+            time.sleep(_EMPTY_READ_DELAY_SECONDS)
+        else:
+            _replace_corrupt(directory, path)
+    raise OSError(f"Could not establish a database instance id in {directory}")
