@@ -38,7 +38,7 @@ EMAIL_RE = re.compile(
     r"(?:\.[a-z0-9\-]{1,63}){0,8}\.[a-z]{2,24}",
     re.IGNORECASE,
 )
-_PHONE_CANDIDATE_RE = re.compile(r"(?<![\d+])\+?\d[\d \t().\-]{6,22}\d(?!\d)")
+_PHONE_CANDIDATE_RE = re.compile(r"(?<![\d+])\+?\d[\d \t().\-]{6,80}\d(?!\d)")
 _DIGIT_GROUP_RE = re.compile(r"\d{1,15}")
 PHONE_MIN_DIGITS = 10
 PHONE_MAX_DIGITS = 15
@@ -184,21 +184,35 @@ DETECTION_MIN_MARGIN = 1.5
 CJK_MIN_RATIO = 0.3
 
 
-def has_phone(text: str) -> bool:
-    """Whether text contains a phone number (10-15 digits, not a year range).
+def _is_date_like(groups: list[str]) -> bool:
+    """Digit groups made only of years and months, with at least two years.
 
-    Year ranges such as "2019 - 2023" or "2015 - 2019 2019 - 2021" have the
-    same shape as a phone number, so a candidate whose digit groups are all
-    years is rejected.
+    Covers "2019 - 2023", "04.2019 - 03.2021", "2019.04 - 2021.03", and
+    "2019-04 - 2021-03" (common de/ja/ko/zh date formats).
+    """
+    years = sum(1 for group in groups if len(group) == 4 and group[:2] in ("19", "20"))
+    months = sum(1 for group in groups if len(group) <= 2 and 1 <= int(group) <= 12)
+    return years >= 2 and years + months == len(groups)
+
+
+def has_phone(text: str) -> bool:
+    """Whether text contains a phone number (10-15 digits, not a date range).
+
+    A candidate is a bounded run of digits and phone separators. Every
+    contiguous run of its digit groups is tested, so a phone followed by a
+    date range ("555-555-0100 2019 - 2023") is still found, while runs made
+    only of years and months are rejected.
     """
     for match in _PHONE_CANDIDATE_RE.finditer(text):
         groups = _DIGIT_GROUP_RE.findall(match.group(0))
-        digits = sum(len(group) for group in groups)
-        if not PHONE_MIN_DIGITS <= digits <= PHONE_MAX_DIGITS:
-            continue
-        if all(len(group) == 4 and group[:2] in ("19", "20") for group in groups):
-            continue
-        return True
+        for first in range(len(groups)):
+            digits = 0
+            for last in range(first, len(groups)):
+                digits += len(groups[last])
+                if digits > PHONE_MAX_DIGITS:
+                    break
+                if digits >= PHONE_MIN_DIGITS and not _is_date_like(groups[first : last + 1]):
+                    return True
     return False
 
 

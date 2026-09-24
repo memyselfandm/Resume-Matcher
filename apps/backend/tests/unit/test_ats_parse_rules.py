@@ -262,7 +262,14 @@ def test_stopword_detection_distinguishes_latin_languages(a: str, b: str) -> Non
 class TestContactPatterns:
     @pytest.mark.parametrize(
         "text",
-        ["(555) 010-4477", "+34 555 010 223", "+86 555 0100 2233", "555.010.4477"],
+        [
+            "(555) 010-4477",
+            "+34 555 010 223",
+            "+86 555 0100 2233",
+            "555.010.4477",
+            "555-555-0100 2019 - 2023",
+            "2019 - 2023 555-555-0100",
+        ],
     )
     def test_phone_numbers_are_detected(self, text: str) -> None:
         assert has_phone(f"Call {text} today")
@@ -275,6 +282,10 @@ class TestContactPatterns:
             "Mentor 2015 - 2019 2019 - 2021",
             "(2011 - 2015)",
             "555-0100",
+            "04.2019 - 03.2021",
+            "2019.04 - 2021.03",
+            "2019-04 - 2021-03",
+            "2019/04 - 2021/03",
         ],
     )
     def test_year_ranges_and_short_numbers_are_not_phones(self, text: str) -> None:
@@ -299,6 +310,7 @@ class TestLinearTime:
             "jan " + " " * 199_996,
             "(cid:1" * 33_000,
         ],
+        ids=["letters", "digits", "thousands", "year-ranges", "month-spaces", "cid"],
     )
     def test_full_check_path_is_fast_on_hostile_text(self, payload: str) -> None:
         document = ExtractedDocument(
