@@ -62,11 +62,12 @@ FileFormat = Literal["pdf", "docx", "doc"]
 MAX_ANALYZED_PAGES = 10
 MAX_EXTRACTED_CHARS = 200_000
 ROW_TOLERANCE_PT = 3.0
-# A dense real resume page holds ~6k characters and a few hundred lines.
-MAX_PAGE_CHARS = 10_000
+# A dense real resume page holds ~6k characters and a few hundred lines; the
+# caps leave headroom for 7 pt resumes and long academic CVs.
+MAX_PAGE_CHARS = 20_000
 MAX_PAGE_OBJECTS = 25_000
 # Interpretation cost is per glyph, so the whole document shares a budget too.
-MAX_DOCUMENT_CHARS = 40_000
+MAX_DOCUMENT_CHARS = 100_000
 MAX_DOCUMENT_OBJECTS = 100_000
 MAX_LINES_PER_PAGE = 600
 _DEADLINE_CHECK_INTERVAL = 256

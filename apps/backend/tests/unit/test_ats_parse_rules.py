@@ -234,6 +234,22 @@ class TestScoring:
             "lever",
         ]
 
+    def test_suppressed_sidebar_scores_like_a_pass(self) -> None:
+        sections = ["contact", "experience", "education", "skills"]
+        suppressed = CheckResult(
+            id="sidebar",
+            category="layout",
+            severity="medium",
+            status="not_applicable",
+            params={"reason": "covered_by_multi_column"},
+        )
+        passed = suppressed.model_copy(update={"status": "pass", "params": {}})
+        multi_column = self._check("high")
+        assert score_profiles([multi_column, suppressed], sections) == score_profiles(
+            [multi_column, passed], sections
+        )
+        assert overall_score([multi_column, suppressed]) == overall_score([multi_column, passed])
+
     def test_missing_required_sections_cost_points(self) -> None:
         results = {r.id: r for r in score_profiles([], ["experience"])}
         assert results["workday"].score == 85
