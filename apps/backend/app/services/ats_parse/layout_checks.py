@@ -53,7 +53,6 @@ GUTTER_MIN_WIDTH_PT = 9.0
 GUTTER_MIN_HEIGHT_RATIO = 0.40
 SIDEBAR_MAX_WIDTH_RATIO = 0.35
 SIDEBAR_MIN_HEIGHT_RATIO = 0.15
-GUTTER_SCAN_STEP_PT = 1.0
 BLOCK_MIN_LINES = 3
 BLOCK_EDGE_TOLERANCE_PT = 2.0
 BLOCK_MAX_LINE_GAP_RATIO = 1.5
@@ -171,8 +170,14 @@ def find_gutters(
             block_cache[indices] = _column_block([lines[index] for index in indices])
         return block_cache[indices]
 
-    x = left_edge
-    while x + GUTTER_MIN_WIDTH_PT <= right_edge:
+    # Bands start only at line right edges (plus the text's left edge). Sliding
+    # a band left to the nearest right edge never adds a blocking line, so
+    # these positions dominate every other x, and the scan costs O(lines)
+    # positions no matter how wide an attacker makes the page.
+    positions = sorted({left_edge, *(line.x1 for line in lines)})
+    for x in positions:
+        if x + GUTTER_MIN_WIDTH_PT > right_edge:
+            break
         check_deadline(deadline)
         band_end = x + GUTTER_MIN_WIDTH_PT
         blockers = [
@@ -205,7 +210,6 @@ def find_gutters(
                     right_width=round(content_right - band_end, 1),
                 )
             )
-        x += GUTTER_SCAN_STEP_PT
     return candidates
 
 
