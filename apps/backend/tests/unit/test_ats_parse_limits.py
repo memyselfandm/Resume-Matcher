@@ -34,6 +34,11 @@ def _dense_pdf(boxes: int, pages: int = 1) -> bytes:
         f"BT /F1 3 Tf {10 + (i % 120) * 5} {10 + (i // 120) * 7.5:.1f} Td (w) Tj ET"
         for i in range(boxes)
     ]
+    return _pdf(operations, pages)
+
+
+def _pdf(operations: list[str], pages: int = 1, media_box: str = "0 0 612 792") -> bytes:
+    """Assemble a valid PDF whose pages share one content stream."""
     content = zlib.compress("\n".join(operations).encode())
     kids = " ".join(f"{3 + 2 * index} 0 R" for index in range(pages))
     font = 3 + 2 * pages
@@ -43,7 +48,7 @@ def _dense_pdf(boxes: int, pages: int = 1) -> bytes:
     ]
     for index in range(pages):
         objects.append(
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [{media_box}] "
             f"/Resources << /Font << /F1 {font} 0 R >> >> /Contents {4 + 2 * index} 0 R >>".encode()
         )
         objects.append(
@@ -198,3 +203,40 @@ def test_unexpected_errors_are_not_reported_as_invalid_documents(
     monkeypatch.setattr(extract_module, "open_bounded_pdf", explode)
     with pytest.raises(error):
         extract_document(b"%PDF-1.4", "x.pdf")
+
+
+def _wide_page_lines() -> tuple[TextLine, ...]:
+    """600 lines alternating between x~0 and x~500,000 (attacker-sized page)."""
+    return tuple(
+        TextLine(
+            0.0 if i % 2 == 0 else 500_000.0,
+            780.0 - (i // 2) * 2.6 - 2.0,
+            (0.0 if i % 2 == 0 else 500_000.0) + 100.0 + (i % 7) * 10.0,
+            780.0 - (i // 2) * 2.6,
+            "w",
+        )
+        for i in range(600)
+    )
+
+
+def test_gutter_scan_cost_is_independent_of_page_width() -> None:
+    page = PageLayout(1, 600_000.0, 800.0, _wide_page_lines(), (), 3_000)
+    started = time.perf_counter()
+    candidates = find_gutters(page)
+    assert time.perf_counter() - started < 0.5
+    assert len(candidates) <= len(page.lines)
+
+
+def test_wide_mediabox_pdf_checks_quickly() -> None:
+    operations = [
+        f"BT /F1 2 Tf {0 if i % 2 == 0 else 500000} {780 - (i // 2) * 2.6:.1f} Td "
+        f"(w{'x' * (i % 7)}) Tj ET"
+        for i in range(600)
+    ]
+    pdf = _pdf(operations, media_box="0 0 600000 800")
+    assert len(pdf) < 4_000
+    document = extract_document(pdf, "wide.pdf")
+    assert len(document.pages[0].lines) >= 300
+    started = time.perf_counter()
+    check_document_sync(pdf, "wide.pdf")
+    assert time.perf_counter() - started < 2.0
