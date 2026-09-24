@@ -137,8 +137,9 @@ Transport shape (`app/mcp/http.py`):
 - `upload_resume(path=...)` and `export_resume_pdf(out_path=...)` are refused:
   local paths are stdio-only; use `content_base64` / the returned base64.
 - **Exact route, per-request lookup.** The route is registered once at import
-  as `Route("/api/v1/mcp", methods=POST/GET/DELETE)` (no `Mount`, so no
-  trailing-slash redirect loops through Next). Each app lifespan builds a
+  as `Route("/api/v1/mcp", methods=POST/GET/DELETE)`, plus the same endpoint at
+  `/api/v1/mcp/` so a trailing slash is served (and authenticated) instead of
+  redirected. No `Mount`, so no redirect loops through Next. Each app lifespan builds a
   fresh server and session manager and stores the manager on
   `app.state.mcp_session_manager`; the endpoint reads it per request and
   answers 404 when it is unset.
@@ -150,11 +151,11 @@ Transport shape (`app/mcp/http.py`):
 | Variable | Default | Meaning |
 |---|---|---|
 | `MCP_HTTP_ENABLED` | `false` | Serve MCP at `/api/v1/mcp`. Off: the path returns 404. |
-| `MCP_AUTH_TOKEN` | empty | Bearer token clients must send as `Authorization: Bearer <token>`. **Required** when enabled: startup fails without it. |
+| `MCP_AUTH_TOKEN` | empty | Bearer token clients must send as `Authorization: Bearer <token>`. **Required** when enabled and at least 32 characters (`openssl rand -hex 32`): startup fails otherwise, before any data migration runs. |
 | `MCP_ALLOW_NO_AUTH` | `false` | Explicit unsafe opt-out: with no token, serve unauthenticated and log a WARNING at startup and on every request. Ignored when a token is set. |
-| `MCP_ALLOWED_HOSTS` | `127.0.0.1:*,localhost:*` | Accepted `Host` header values (comma-separated; `host:*` = any port). Replaces the default. Otherwise HTTP 421. |
-| `MCP_ALLOWED_ORIGINS` | `http://localhost:*,http://127.0.0.1:*` | Accepted browser `Origin` values. Requests without `Origin` (non-browser clients) pass. Otherwise HTTP 403. |
-| `MCP_ALLOWED_FORWARDED_HOSTS` | empty (not checked) | Optional allow-list for `X-Forwarded-Host` (the host the client used in front of the proxy, e.g. `localhost:3000`). When set, a request whose `X-Forwarded-Host` does not match gets HTTP 421; requests without the header pass. |
+| `MCP_ALLOWED_HOSTS` | `127.0.0.1:*,localhost:*,[::1]:*` | Accepted `Host` header values (comma-separated; `host:*` = any port). Replaces the default, so an override **must still include the host of the frontend's `BACKEND_ORIGIN`** (default `127.0.0.1:*`), or every request through the Next.js proxy gets HTTP 421. |
+| `MCP_ALLOWED_ORIGINS` | `http://localhost:*,http://127.0.0.1:*,http://[::1]:*` | Accepted browser `Origin` values. Requests without `Origin` (non-browser clients) pass. Otherwise HTTP 403. |
+| `MCP_ALLOWED_FORWARDED_HOSTS` | empty (not checked) | Optional allow-list for `X-Forwarded-Host` (the host the client used in front of the proxy, e.g. `localhost:3000`). When set, every value of every `X-Forwarded-Host` header (comma lists included) must match, else HTTP 421; requests without the header pass. `host:*` patterns here accept only a numeric port. |
 
 ### Security notes
 
@@ -165,9 +166,16 @@ Transport shape (`app/mcp/http.py`):
   `MCP_ALLOW_NO_AUTH=1` is set on purpose.
 - Order of checks: disabled (404) -> bearer token (401, constant-time
   `hmac.compare_digest` on the UTF-8 bytes, before the SDK sees the request)
-  -> `X-Forwarded-Host` allow-list (421) -> SDK Host (421) and Origin (403)
-  validation against DNS rebinding -> body limit (413).
+  -> `X-Forwarded-Host` allow-list (421) -> SDK body limit (413; a declared
+  `Content-Length` is rejected before anything else in the SDK) and SDK
+  Host (421) / Origin (403) validation against DNS rebinding. An oversized
+  request can therefore get 413 even with a foreign Host or Origin.
 - The token is held as a `SecretStr` and never logged.
+- **Threat model: the token protects only `/api/v1/mcp`.** The rest of the
+  REST API under `/api/v1` (which the web UI uses) is unauthenticated by
+  upstream design: Resume Matcher is local-first. Setting `MCP_AUTH_TOKEN`
+  does not secure the app; do not expose port 3000 (or 8000) beyond trusted
+  networks regardless of it.
 - Tools exposed over HTTP are the same as on stdio: no deletes, config writes
   or API-key routes. Anyone holding the token can read and edit resumes and
   spend LLM credits; treat it like a password and use HTTPS in front of any
@@ -285,7 +293,9 @@ Caches and tasks are process-local, which matches the single-process backend.
   and that HTTP settings never affect the stdio process.
 - `tests/integration/test_mcp_http.py` - the HTTP transport in-process through
   the real app lifespan: 404 when disabled, startup failure without a token,
-  401/421/403/413, both eras without `Mcp-Session-Id`, `-32020` header
+  short-token and pre-migration validation, cleanup after a failed MCP
+  teardown, 401/421/403/413, trailing slash without redirect, strict
+  host-pattern ports, both eras without `Mcp-Session-Id`, `-32020` header
   mismatches, a 5 MB base64 upload, two sequential `TestClient` lifespans and
   toggling `MCP_HTTP_ENABLED` without a module reload.
 - `tests/integration/test_mcp_http_proxy.py` - opt-in (`e2e` marker) test
