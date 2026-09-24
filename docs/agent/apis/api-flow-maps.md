@@ -57,7 +57,9 @@ GET /api/v1/resumes/{id}/pdf
 
 ```
 GET /api/v1/health
-└── Return {status: "healthy"}        # pure liveness — does NOT call the LLM
+└── Return {status: "healthy", db_instance_id}   # pure liveness — does NOT call the LLM;
+                                                   # db_instance_id = UUID in DATA_DIR/instance_id
+                                                   # (null until DATA_DIR holds a database)
 ```
 
 ## System Status
