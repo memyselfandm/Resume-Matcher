@@ -6,7 +6,13 @@ Parse checking measures **parseability**, not keyword fit. It complements the
 keyword ATS score (`app/services/ats.py`), which is unchanged. The engine is
 deterministic: no LLM is called, and the same input yields byte-identical JSON.
 
-## Endpoint
+## Endpoints
+
+- `POST /api/v1/ats/parse-check`: an uploaded file (below).
+- `POST /api/v1/resumes/{resume_id}/parse-check`: Resume Matcher's own output
+  (see [Own output](#own-output)).
+
+### Uploaded file
 
 `POST /api/v1/ats/parse-check` (multipart form)
 
@@ -21,20 +27,25 @@ The file is analyzed in memory and never stored. Limits:
   parse checks cannot starve uploads) and a 60 s deadline covering queueing
   and analysis; the worker thread also checks the deadline cooperatively;
 - the 16 MB decoded-stream budget of the bounded PDF parser;
-- at most 10 analyzed pages and 200,000 extracted characters (body, header/
-  footer, and text-box text are each capped);
+- at most 10 analyzed pages; DOCX body, header/footer, and text-box text are
+  each capped at 200,000 characters, PDFs at the 100,000-character document
+  budget below (the `truncated` check's `char_limit` param quotes the cap
+  that applies to the file's format);
 - per page, at most 20,000 characters or 25,000 drawing objects, checked while
   the page is interpreted and before layout analysis; per document, 100,000
   characters / 100,000 objects; pages over 600 text lines keep their text but
   skip geometric analysis. All of these are reported through `truncated`
   (`dense_pages` lists skipped pages), and extractability becomes `partial`.
   A page skipped for density never fails `text_layer`: that check becomes
-  `not_applicable` (reason `dense_pages`) when no other text was recovered.
+  `not_applicable` (reason `dense_pages`) when no other text was recovered,
+  and `overall_score` is then capped at 50, because nothing was read.
 - the column detector evaluates bands only at line edges, so its cost depends
   on the number of lines (at most 600 per page), not on page coordinates.
 
 pdfminer's hierarchical text-box grouping (`boxes_flow`) is disabled: it is
-quadratic in the number of boxes, and the engine never uses box order.
+quadratic in the number of boxes, and the engine never uses box order. Text
+inside form XObjects is grouped too (`all_texts`): Chromium draws
+semi-transparent text (CSS `opacity`) inside one, and extractors read it.
 
 | Status | Meaning |
 |--------|---------|
@@ -48,7 +59,7 @@ quadratic in the number of boxes, and the engine never uses box order.
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "file_format": "pdf",
   "extractability": "full | partial | none | unsupported_format",
   "content_language": "en",
@@ -74,6 +85,8 @@ check; any fatal failure caps a score at 10.
 - `profiles` are heuristic re-weightings (ported from ats-screener, marked
   `"kind": "heuristic"`), not vendor-verified behavior.
 - `roundtrip` is filled only by own-output checks.
+- Own-output checks of two-column templates add `expected_by_template: true`
+  to the `multi_column`/`sidebar` params and lower their severity to `medium`.
 
 Schema history: 2.0 split `content_score` out of `overall_score` and added
 `profiles[].kind`.
@@ -105,17 +118,182 @@ Schema history: 2.0 split `content_score` out of `overall_score` and added
 Phone rule: a phone number needs 10-15 digits. Short international numbers
 (for example `+352 12 34 56`) are not counted. Runs made only of years and
 months are dates, not phones: `2019 - 2023`, `04.2019 - 03.2021`,
-`2019.04 - 2021.03`, `2019-04 - 2021-03`. A phone next to a date range
-(`555-555-0100 2019 - 2023`) is still found.
+`2019.04 - 2021.03`, `2019-04 - 2021-03`. A number labeled `ISBN`
+(`ISBN 978-3-16-148410-0`, `ISBN-13: ...`) is a publication id, not a phone.
+A phone next to a date range or an ISBN (`555-555-0100 2019 - 2023`) is
+still found.
+
+## Own output
+
+`POST /api/v1/resumes/{resume_id}/parse-check` (JSON body, every field optional)
+
+```json
+{
+  "settings": {
+    "template": "swiss-single", "pageSize": "A4",
+    "margins": {"top": 10, "bottom": 10, "left": 10, "right": 10},
+    "spacing": {"section": 3, "item": 2, "lineHeight": 3},
+    "fontSize": {"base": 3, "headerScale": 3, "headerFont": "serif", "bodyFont": "sans-serif"},
+    "compactMode": false, "showContactIcons": false, "accentColor": "blue",
+    "lang": null
+  },
+  "content_language": null,
+  "all_templates": false
+}
+```
+
+"Own output" is exactly the PDF `GET /api/v1/resumes/{id}/pdf` returns for
+the full settings object: the frontend `TemplateSettings` (defaults equal
+`DEFAULT_TEMPLATE_SETTINGS`) plus `lang`, i.e. all 17 query parameters of
+that route. The endpoint fetches that PDF, and the payload the print page
+renders (`GET /api/v1/resumes?resume_id=` -> `processed_resume`), through the
+in-process ASGI bridge (`app/mcp/bridge.py`), so validation and the print URL
+are the download route's own. Nothing is stored.
+
+- `settings.lang` is the render locale (`en`, `es`, `fr`, `ja`, `ko`, `pt-BR`,
+  `zh`): it localizes default section headings, and the heading checks expect
+  that locale's headings. `content_language` is the language of the resume
+  text; it defaults to the configured content language and gates the
+  English-lexicon checks. The two are independent.
+- `all_templates` renders all seven templates with otherwise identical
+  settings, one after another (a check never holds more than one renderer
+  slot).
+- Budgets: 60 s for one template, 200 s for all seven. Renderer admission is
+  fail-fast (a busy renderer returns 503 instead of queueing), so a busy
+  render is retried up to 3 attempts with 1 s / 2 s backoff while the budget
+  allows. Other render failures are not retried.
+
+Response:
+
+```json
+{
+  "resume_id": "...", "render_locale": "en", "settings": {"...": "..."},
+  "results": [
+    {"template": "swiss-two-column", "status": "ok", "expected_by_template": true,
+     "render_attempts": 1, "error": null, "report": {"...": "ParseCheckReport with roundtrip"}},
+    {"template": "modern", "status": "render_failed", "expected_by_template": false,
+     "render_attempts": 3, "error": "render_busy", "report": null}
+  ]
+}
+```
+
+`status` is `ok`, `render_failed` (`error`: `render_busy` after all retries,
+`render_timeout`, or `render_error`), or `timed_out` (`error`:
+`budget_exhausted`). With `all_templates` the response is 200 whatever the
+per-template outcome.
+
+| Status | Meaning |
+|--------|---------|
+| 200 | Results returned |
+| 404 | Unknown resume id |
+| 409 | The resume has no structured data yet (still processing, or failed) |
+| 422 | Invalid settings, locale, or `content_language` (unknown fields are rejected) |
+| 503 | Single template: renderer busy after retries, or render failed |
+| 504 | Single template: render or analysis exceeded the budget |
+
+**Two-column templates.** `swiss-two-column`, `modern-two-column`, and
+`vivid` are two-column by design (CSS grids of 65:35, 65:35, and 63:37).
+For them `expected_by_template` is `true`, and their `multi_column` and
+`sidebar` checks carry `params.expected_by_template: true` with severity
+lowered to `medium`: the signal is still reported (an ATS may read the
+columns out of order), but it is the chosen design. `swiss-single`, `modern`,
+`latex`, and `clean` are single-column (full-width blocks; dates and
+locations right-aligned with flex `justify-between`).
+
+### Round trip
+
+`report.roundtrip` compares the extracted text with the rendered payload
+(`app/services/ats_parse/roundtrip.py`), after localizing default section
+names the way the print page does.
+
+- `content_recall`: share of expected fields `found` (order-free). Short
+  fields (1-2 tokens) must match exactly; longer ones need 90% token coverage
+  (50% or more is `garbled`, less is `missing`).
+- `order_fidelity`: Kendall tau over found fields, rescaled to [0, 1], against
+  the template's render order.
+- Fields in hidden sections are `hidden`; fields a template does not print are
+  `not_rendered`. Neither counts against recall.
+
+`app/services/ats_parse/templates.py` holds each template's rendered-field
+map and render order, mirroring `apps/frontend/components/resume/`: every
+template prints every personal, entry, and additional-list field; header
+contact order differs (latex and clean start with the location, vivid with
+the links); the two-column templates place sections by a fixed layout (main
+column, then sidebar) instead of `sectionMeta` order, and replace the
+"additional" section's name with fixed per-list headings, so that heading is
+`not_rendered` there. Tests keep the template ids and localized default
+headings in sync with the frontend files.
+
+Entries (jobs, schools, projects, custom items) are anchored by walking the
+text in render order: an entry starts at the earliest verbatim occurrence of
+one of its identity fields (title, company, degree, institution, project
+name, role) that no earlier entry's bullets claim, and every value of an
+entry must be found inside that entry's span. A bullet that mentions the next
+entry's employer ("Shipped features for Google Maps") therefore stays in its
+own entry, and a value present only in an identical duplicate entry is not
+reported as found. Limitation: duplicate entries are told apart only when
+they have at least two identity values.
+
+### Results on real renders
+
+The committed fixtures in `tests/fixtures/ats_parse/renders/` were rendered
+through the real route (Next.js print page + Chromium, macOS system fonts,
+default settings) from a synthetic resume with a repeated employer, a bullet
+naming that employer, HTML bullets, a visible and a hidden custom section:
+
+| Template | multi_column | sidebar | expected_by_template | content_recall | order_fidelity | overall | content |
+|----------|--------------|---------|----------------------|----------------|----------------|---------|---------|
+| swiss-single | pass | pass | false | 1.000 | 0.993 | 100 | 100 |
+| swiss-two-column | fail | not_applicable | true | 0.947 | 0.737 | 90 | 90 |
+| modern | pass | pass | false | 1.000 | 0.993 | 100 | 100 |
+| modern-two-column | fail | not_applicable | true | 0.947 | 0.734 | 90 | 90 |
+| latex | pass | pass | false | 1.000 | 0.991 | 100 | 100 |
+| clean | pass | pass | false | 0.810 | 1.000 | 90 | 90 |
+| vivid | fail | pass | true | 0.825 | 0.716 | 80 | 90 |
+
+Column detector re-validation: no single-column render yields any gutter
+candidate at band widths from 6 to 18 pt; the two-column renders have a
+gutter spanning 0.89-0.92 of the text height (threshold 0.40) at every width,
+so the frozen 9 pt / 40% thresholds hold with a wide margin. The sidebar is
+reported under `multi_column` (swiss/modern two-column: 0.33 of page width,
+suppressed) or not narrow enough to count separately (vivid: 0.35).
+
+Findings on these renders (reported, not suppressed):
+
+- `showContactIcons=true` does not trip `icon_font_glyphs`: the contact icons
+  are inline SVG drawings, which extract no text.
+- clean and vivid set job titles and project roles in `font-variant:
+  small-caps`. With the macOS system font (`ui-sans-serif`), Chromium emits
+  the small-cap "e" as U+F765 (Private Use Area), so "Senior Software
+  Engineer" extracts as "Snior Softwar Enginr": `icon_font_glyphs` fails and
+  those fields are `missing`. Linux renders use other fonts and may differ.
+- clean's letter-spaced section headings (`letter-spacing: 0.12em`) extract
+  as spaced letters (`S U M M A R Y`), so its headings are `missing` and
+  `section_headings` fails.
+- In the two-column templates the extractor reads rows across both columns,
+  so sidebar text interleaves with wrapped main-column lines (the summary and
+  some sidebar entries are `garbled`, order fidelity about 0.73), and sidebar
+  headings share rows with main-column text.
+
+Regenerate the fixtures when a template changes (needs Chromium, the
+frontend at `FRONTEND_BASE_URL`, and a free port 8000; see the script's
+docstring):
+
+```bash
+cd apps/backend
+uv run python ../../scripts/generate_ats_render_fixtures.py
+```
+
+The same flow runs end to end as an opt-in test: `uv run pytest -m pdf`.
 
 ## Scope and caveats
 
 - The extractor model is **line-based** (pdfminer lines rebuilt into visual
   rows, like ats-screener's pdf.js reconstruction). It is representative, not
   any vendor's parser.
-- The committed fixtures imitate the templates' geometry in synthetic HTML.
-  Detector thresholds must be re-validated against real template renders when
-  own-output checks land.
+- The upload fixtures imitate the templates' geometry in synthetic HTML;
+  the own-output fixtures are real template renders, and the detector
+  thresholds were re-validated on them (see above).
 - A second extractor (pypdf) and the `extractor_disagreement` check are
   deferred until maintainers agree to make pypdf a runtime dependency.
 
@@ -125,7 +303,9 @@ months are dates, not phones: `2019 - 2023`, `04.2019 - 03.2021`,
 pinned `LAParams`, row reconstruction, python-docx structure), `layout_checks.py`
 (gutter-band column and sidebar detector, calibrated on the fixtures),
 `content_checks.py` (language detection and gating), `roundtrip.py`
-(self-consistency against a source payload), `profiles.py`, `report.py`,
+(self-consistency against a source payload), `templates.py` (rendered-field
+maps, render order, localized default headings), `own_output.py` (render
+through the bridge, retries, budgets), `profiles.py`, `report.py`,
 `messages_en.py`, `engine.py`.
 
 Fixtures in `apps/backend/tests/fixtures/ats_parse/` are synthetic and

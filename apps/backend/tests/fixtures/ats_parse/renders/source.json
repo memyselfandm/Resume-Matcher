@@ -1,0 +1,214 @@
+{
+  "additional": {
+    "awards": [
+      "Northwind Engineering Excellence Award 2023"
+    ],
+    "certificationsTraining": [
+      "Certified Kubernetes Administrator"
+    ],
+    "languages": [
+      "English (Native)",
+      "Spanish (Professional)"
+    ],
+    "technicalSkills": [
+      "Python",
+      "Go",
+      "PostgreSQL",
+      "Kafka",
+      "Kubernetes",
+      "Terraform",
+      "FastAPI"
+    ]
+  },
+  "customSections": {
+    "publications": {
+      "items": [
+        {
+          "description": [
+            "Case study of exactly-once delivery at scale."
+          ],
+          "descriptionStyles": [
+            "bullet"
+          ],
+          "id": 1,
+          "location": null,
+          "subtitle": "Bay Area Systems Journal",
+          "title": "Designing Reliable Event Pipelines",
+          "years": "2023"
+        }
+      ],
+      "sectionType": "itemList",
+      "strings": null,
+      "text": null
+    },
+    "volunteering": {
+      "items": null,
+      "sectionType": "stringList",
+      "strings": [
+        "Code mentor at Oakland Youth Coding Club"
+      ],
+      "text": null
+    }
+  },
+  "education": [
+    {
+      "degree": "B.S. Computer Science",
+      "description": "Graduated with honors.",
+      "id": 1,
+      "institution": "Bay State University",
+      "years": "Aug 2011 - May 2015"
+    }
+  ],
+  "personalInfo": {
+    "email": "jordan.rivera@example.com",
+    "github": "github.com/jordan-rivera-example",
+    "linkedin": "linkedin.com/in/jordan-rivera-example",
+    "location": "Oakland, CA",
+    "name": "Jordan Rivera",
+    "phone": "(555) 010-4477",
+    "title": "Senior Backend Engineer",
+    "website": "https://jordanrivera.example.com"
+  },
+  "personalProjects": [
+    {
+      "description": [
+        "Open-source job scheduler with 1,200 GitHub stars and 40 contributors."
+      ],
+      "descriptionStyles": [
+        "bullet"
+      ],
+      "github": null,
+      "id": 1,
+      "name": "Tidewater Scheduler",
+      "role": "Creator and Maintainer",
+      "website": null,
+      "years": "Mar 2022 - Present"
+    }
+  ],
+  "sectionMeta": [
+    {
+      "displayName": "Personal Info",
+      "id": "personalInfo",
+      "isDefault": true,
+      "isVisible": true,
+      "key": "personalInfo",
+      "order": 0,
+      "sectionType": "personalInfo"
+    },
+    {
+      "displayName": "Summary",
+      "id": "summary",
+      "isDefault": true,
+      "isVisible": true,
+      "key": "summary",
+      "order": 1,
+      "sectionType": "text"
+    },
+    {
+      "displayName": "Experience",
+      "id": "workExperience",
+      "isDefault": true,
+      "isVisible": true,
+      "key": "workExperience",
+      "order": 2,
+      "sectionType": "itemList"
+    },
+    {
+      "displayName": "Education",
+      "id": "education",
+      "isDefault": true,
+      "isVisible": true,
+      "key": "education",
+      "order": 3,
+      "sectionType": "itemList"
+    },
+    {
+      "displayName": "Projects",
+      "id": "personalProjects",
+      "isDefault": true,
+      "isVisible": true,
+      "key": "personalProjects",
+      "order": 4,
+      "sectionType": "itemList"
+    },
+    {
+      "displayName": "Skills & Awards",
+      "id": "additional",
+      "isDefault": true,
+      "isVisible": true,
+      "key": "additional",
+      "order": 5,
+      "sectionType": "stringList"
+    },
+    {
+      "displayName": "Publications",
+      "id": "publications",
+      "isDefault": false,
+      "isVisible": true,
+      "key": "publications",
+      "order": 6,
+      "sectionType": "itemList"
+    },
+    {
+      "displayName": "Volunteering",
+      "id": "volunteering",
+      "isDefault": false,
+      "isVisible": false,
+      "key": "volunteering",
+      "order": 7,
+      "sectionType": "stringList"
+    }
+  ],
+  "summary": "Backend engineer with 9 years of experience building reliable data platforms, developer tooling, and logistics systems. Focused on measurable reliability and delivery improvements.",
+  "workExperience": [
+    {
+      "company": "Northwind Analytics",
+      "description": [
+        "<strong>Led</strong> migration of 40 services to a shared deployment platform, reducing release time by 35%.",
+        "Designed an event pipeline processing 2,000,000 records per day with <em>99.9%</em> availability.",
+        "Shipped routing features for Northwind Analytics Maps used by 12 regional teams."
+      ],
+      "descriptionStyles": [
+        "bullet",
+        "bullet",
+        "bullet"
+      ],
+      "id": 1,
+      "location": "San Francisco, CA",
+      "title": "Senior Software Engineer",
+      "years": "Jan 2021 - Present"
+    },
+    {
+      "company": "Northwind Analytics",
+      "description": [
+        "Built route optimization services used by 300 dispatchers across 12 hubs.",
+        "Improved query latency by 60% by redesigning the reporting schema.",
+        "Implemented contract tests that reduced production incidents by 25% &amp; cut on-call pages in half."
+      ],
+      "descriptionStyles": [
+        "bullet",
+        "bullet",
+        "bullet"
+      ],
+      "id": 2,
+      "location": "Oakland, CA",
+      "title": "Software Engineer",
+      "years": "Jun 2018 - Dec 2020"
+    },
+    {
+      "company": "Harbor Point Media",
+      "description": [
+        "Developed content publishing tools for a newsroom of 80 editors.",
+        "Streamlined image processing jobs, cutting storage costs by 18%."
+      ],
+      "descriptionStyles": [
+        "bullet",
+        "bullet"
+      ],
+      "id": 3,
+      "location": "Vallejo, CA",
+      "title": "Junior Developer",
+      "years": "Aug 2015 - May 2018"
+    }
+  ]
+}

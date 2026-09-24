@@ -93,6 +93,13 @@ _PDF_CLEANUP_RESERVE_SECONDS = _bounded_env_float(
 )
 
 
+# Client-facing details of the two retryable render failures. The PDF route
+# returns them as 503 details; parse-check matches them to tell a busy renderer
+# (retry) from a timeout.
+RENDER_BUSY_MESSAGE = "PDF renderer is busy. Please try again shortly."
+RENDER_TIMEOUT_MESSAGE = "PDF rendering timed out. Please try again, or try a simpler resume."
+
+
 class PDFRenderError(Exception):
     """Custom exception for PDF rendering errors with helpful messages."""
 
@@ -631,9 +638,7 @@ def _acquire_render_slot() -> None:
     global _active_renders
     with _admission_lock:
         if _active_renders >= _PDF_MAX_CONCURRENCY:
-            raise PDFRenderOverloadedError(
-                "PDF renderer is busy. Please try again shortly."
-            )
+            raise PDFRenderOverloadedError(RENDER_BUSY_MESSAGE)
         _active_renders += 1
 
 
@@ -895,9 +900,7 @@ async def render_resume_pdf(
         raise PDFRenderError("PDF renderer failed to initialize.")
     except _PDFDeadlineExceeded as error:
         logger.warning("PDF rendering timed out during %s for %s", error.stage, url)
-        raise PDFRenderTimeoutError(
-            "PDF rendering timed out. Please try again, or try a simpler resume."
-        ) from error
+        raise PDFRenderTimeoutError(RENDER_TIMEOUT_MESSAGE) from error
     except PlaywrightError as error:
         _raise_playwright_error(error, url)
     finally:

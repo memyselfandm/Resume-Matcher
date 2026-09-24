@@ -74,6 +74,9 @@ _DEADLINE_CHECK_INTERVAL = 256
 
 # Layout analysis results depend on these values, so they are pinned rather
 # than inherited from pdfminer defaults that may change between releases.
+# ``all_texts`` also groups text drawn inside form XObjects (LTFigure) into
+# lines: Chromium draws semi-transparent text (CSS ``opacity``, e.g. the vivid
+# template's surname) inside one, and text extractors do read it.
 PINNED_LAPARAMS = LAParams(
     line_overlap=0.5,
     char_margin=2.0,
@@ -81,7 +84,7 @@ PINNED_LAPARAMS = LAParams(
     word_margin=0.1,
     boxes_flow=None,
     detect_vertical=False,
-    all_texts=False,
+    all_texts=True,
 )
 
 SUPPORTED_SUFFIXES: dict[str, FileFormat] = {
