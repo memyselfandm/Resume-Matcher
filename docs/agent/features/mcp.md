@@ -134,7 +134,11 @@ process (`previews.py`, LRU of 64, expiring with the preview's
 makes `tailor_resume_confirm` fail with "run tailor_resume_preview again". The
 handle stays valid after a successful confirm, so retrying (for example after
 a lost response) replays the router's stored confirmation: same tailored
-resume, same single tracker card.
+resume, same single tracker card. A retry made while the first confirm is still
+running joins that task and returns the same `task_id` instead of a conflict.
+Retention note: a confirmed preview's payload stays in memory until the preview
+expires (`PREVIEW_TTL_SECONDS`, default 24 hours) or is evicted by the 64-entry
+LRU; restart the MCP server to drop it sooner.
 
 **Tasks.** Long operations run in an in-memory task registry (`tasks.py`,
 cancelled on shutdown). It holds at most 32 tasks, counting running ones and
