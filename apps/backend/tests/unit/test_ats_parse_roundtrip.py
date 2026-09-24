@@ -137,3 +137,30 @@ def test_substring_titles_anchor_to_their_own_entry(source: dict[str, Any], rend
     statuses = _statuses(result)
     assert statuses["workExperience[1].title"] == "found"
     assert statuses["workExperience[1].years"] == "found"
+
+
+@pytest.mark.parametrize(
+    ("titles", "bullets"),
+    [
+        (("Senior Engineer", "Engineer"), ("Built search ranking pipelines.", "Maintained index services.")),
+        (("Engineer", "Engineer"), ("Built search ranking pipelines.", "Maintained index services.")),
+    ],
+)
+def test_repeated_employer_entries_each_anchor_to_their_own_text(
+    titles: tuple[str, str], bullets: tuple[str, str]
+) -> None:
+    years = ("2021 - 2023", "2018 - 2021")
+    source = {
+        "personalInfo": {"name": "Ada Example"},
+        "workExperience": [
+            {"title": title, "company": "Google", "years": year, "description": [bullet]}
+            for title, year, bullet in zip(titles, years, bullets, strict=True)
+        ],
+    }
+    text = "Ada Example\n" + "\n".join(
+        f"{title} {year}\nGoogle\n{bullet}"
+        for title, year, bullet in zip(titles, years, bullets, strict=True)
+    )
+    result = compute_roundtrip(source, text)
+    assert result.content_recall == 1.0
+    assert {field.status for field in result.fields} == {"found"}
