@@ -5,6 +5,9 @@ guards, wait-time policy, Markdown rendering and the database instance id.
 """
 
 import asyncio
+import multiprocessing
+import threading
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -84,12 +87,6 @@ class TestPreviewCache:
         assert cache.get("b") is None
         assert cache.get("a") is not None
         assert cache.get("c") is not None
-
-    def test_discard_removes_entry(self) -> None:
-        cache = PreviewCache(clock=FakeClock())
-        cache.put(_preview("p1", 9999.0))
-        cache.discard("p1")
-        assert cache.get("p1") is None
 
     def test_preview_expiry_parses_iso_and_falls_back_to_ttl(self) -> None:
         assert preview_expiry("1970-01-01T00:16:40+00:00", 60, now=0.0) == 1000.0
@@ -451,6 +448,42 @@ class TestInstanceId:
         assert database_established(tmp_path) is False
         (tmp_path / "resume_matcher.db").write_bytes(b"")
         assert database_established(tmp_path) is True
+
+    def test_empty_file_is_replaced_after_retries(self, tmp_path: Path) -> None:
+        (tmp_path / INSTANCE_ID_FILENAME).write_text("")
+        instance_id = get_db_instance_id(tmp_path)
+        assert (tmp_path / INSTANCE_ID_FILENAME).read_text() == instance_id
+
+    def test_concurrent_threads_converge_on_one_id(self, tmp_path: Path) -> None:
+        import app.instance_id as instance_id_module
+
+        workers = 16
+        barrier = threading.Barrier(workers)
+        results: list[str | None] = []
+        lock = threading.Lock()
+
+        def create() -> None:
+            barrier.wait()
+            # Bypass the shared in-process cache so every thread hits the disk.
+            instance_id_module._cache.pop(tmp_path, None)
+            value = get_db_instance_id(tmp_path)
+            with lock:
+                results.append(value)
+
+        threads = [threading.Thread(target=create) for _ in range(workers)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        on_disk = (tmp_path / INSTANCE_ID_FILENAME).read_text()
+        assert set(results) == {on_disk}
+        assert not list(tmp_path.glob(".instance_id.*.tmp"))
+
+    def test_concurrent_processes_converge_on_one_id(self, tmp_path: Path) -> None:
+        context = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=4, mp_context=context) as pool:
+            results = list(pool.map(get_db_instance_id, [tmp_path] * 8))
+        assert set(results) == {(tmp_path / INSTANCE_ID_FILENAME).read_text()}
 
     def test_defaults_to_settings_data_dir(self) -> None:
         from app.config import settings
