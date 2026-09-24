@@ -14,7 +14,7 @@ import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -23,12 +23,18 @@ from starlette.testclient import TestClient
 from app.config import Settings, settings
 from app.database import Database
 from app.main import app
-from app.mcp.http import MAX_REQUEST_BODY_BYTES, MCP_HTTP_PATH, MCPHTTPConfigurationError
+from app.mcp.http import (
+    MAX_REQUEST_BODY_BYTES,
+    MCP_HTTP_PATH,
+    MCPHTTPConfigurationError,
+    _host_allowed,
+)
 
-TOKEN = "mcp-test-token-5f0c2d7e"
+TOKEN = "mcp-test-token-5f0c2d7e9a41b3c68d20e7f1"
 MODERN = "2026-07-28"
 LEGACY = "2025-11-25"
 BACKEND_ORIGIN = "http://127.0.0.1:8000"
+UNICODE_TOKEN = "jeton-unicode-0123456789abcdef-é"
 ENVELOPE = {
     "io.modelcontextprotocol/protocolVersion": MODERN,
     "io.modelcontextprotocol/clientCapabilities": {},
@@ -51,7 +57,7 @@ def apply_env(monkeypatch: pytest.MonkeyPatch, **env: str) -> None:
         monkeypatch.delenv(name, raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
-    fresh = Settings()
+    fresh = Settings(_env_file=None)
     for name in MCP_SETTING_NAMES:
         monkeypatch.setattr(settings, name, getattr(fresh, name))
 
@@ -172,6 +178,52 @@ class TestGating:
             async with served():
                 pass
 
+    async def test_short_token_fails_startup(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        apply_env(monkeypatch, MCP_HTTP_ENABLED="1", MCP_AUTH_TOKEN="x" * 31)
+        with caplog.at_level(logging.ERROR, logger="app.mcp.http"):
+            with pytest.raises(MCPHTTPConfigurationError, match="openssl rand -hex 32"):
+                async with served():
+                    pass
+        assert "too short (31 characters)" in caplog.text
+        assert "x" * 31 not in caplog.text
+
+    async def test_invalid_settings_fail_before_data_migrations(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        apply_env(monkeypatch, MCP_HTTP_ENABLED="1")
+        with (
+            patch("app.scripts.migrate_tinydb_to_sqlite.migrate", new_callable=AsyncMock) as migrate,
+            patch("app.config.migrate_legacy_keys") as migrate_keys,
+        ):
+            with pytest.raises(MCPHTTPConfigurationError):
+                async with served():
+                    pass
+        migrate.assert_not_awaited()
+        migrate_keys.assert_not_called()
+
+    async def test_mcp_teardown_failure_still_runs_cleanup(self, enabled: None) -> None:
+        @asynccontextmanager
+        async def failing_teardown(_app: Any) -> AsyncIterator[None]:
+            yield
+            raise RuntimeError("MCP teardown failed")
+
+        database = MagicMock()
+        database.close = AsyncMock()
+        with (
+            patch("app.main.mcp_http_lifespan", failing_teardown),
+            patch("app.main.drain_processing_cleanup_tasks", new_callable=AsyncMock) as drain,
+            patch("app.main.close_pdf_renderer", new_callable=AsyncMock) as close_pdf,
+            patch("app.main.db", database),
+        ):
+            with pytest.raises(RuntimeError, match="MCP teardown failed"):
+                async with app.router.lifespan_context(app):
+                    pass
+        drain.assert_awaited_once()
+        close_pdf.assert_awaited_once()
+        database.close.assert_awaited_once()
+
     async def test_allow_no_auth_serves_with_warnings(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -229,16 +281,31 @@ class TestAuth:
         assert response.headers["www-authenticate"] == "Bearer"
         assert TOKEN not in caplog.text
 
+    async def test_trailing_slash_is_served_without_redirect(self, enabled: None) -> None:
+        path = MCP_HTTP_PATH + "/"
+        anonymous = modern_headers("server/discover")
+        del anonymous["Authorization"]
+        async with served() as client:
+            unauthenticated = await client.post(
+                path, json=modern_body(1, "server/discover"), headers=anonymous
+            )
+            authenticated = await client.post(
+                path, json=modern_body(2, "server/discover"), headers=modern_headers("server/discover")
+            )
+        assert unauthenticated.status_code == 401
+        assert "location" not in unauthenticated.headers
+        assert_modern_discover(authenticated)
+
     async def test_non_ascii_token_compares_as_utf8(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        apply_env(monkeypatch, MCP_HTTP_ENABLED="1", MCP_AUTH_TOKEN="jeton-é")
+        apply_env(monkeypatch, MCP_HTTP_ENABLED="1", MCP_AUTH_TOKEN=UNICODE_TOKEN)
         good: dict[str, Any] = modern_headers("server/discover")
-        good["Authorization"] = "Bearer jeton-é".encode()
+        good["Authorization"] = f"Bearer {UNICODE_TOKEN}".encode()
         async with served() as client:
             ok = await client.post(MCP_HTTP_PATH, json=modern_body(1, "server/discover"), headers=good)
             bad = await client.post(
                 MCP_HTTP_PATH,
                 json=modern_body(2, "server/discover"),
-                headers={**good, "Authorization": "Bearer jeton-e"},
+                headers={**good, "Authorization": f"Bearer {UNICODE_TOKEN[:-1]}e"},
             )
         assert_modern_discover(ok)
         assert bad.status_code == 401
@@ -366,6 +433,15 @@ class TestTransportSecurity:
         assert modern.status_code == 403
         assert legacy.status_code == 403
 
+    async def test_ipv6_loopback_allowed_by_default(self, enabled: None) -> None:
+        async with served(base_url="http://[::1]:8000") as client:
+            response = await client.post(
+                MCP_HTTP_PATH,
+                json=modern_body(1, "server/discover"),
+                headers=modern_headers("server/discover", Origin="http://[::1]:3000"),
+            )
+        assert_modern_discover(response)
+
     async def test_local_origin_allowed(self, enabled: None) -> None:
         async with served() as client:
             response = await client.post(
@@ -421,6 +497,53 @@ class TestTransportSecurity:
         assert_modern_discover(proxied)
         assert foreign.status_code == 421
         assert_modern_discover(direct)
+
+    async def test_every_forwarded_host_value_is_checked(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        apply_env(
+            monkeypatch,
+            MCP_HTTP_ENABLED="1",
+            MCP_AUTH_TOKEN=TOKEN,
+            MCP_ALLOWED_FORWARDED_HOSTS="localhost:*",
+        )
+        base = list(modern_headers("server/discover").items())
+        async with served() as client:
+            two_headers = await client.post(
+                MCP_HTTP_PATH,
+                json=modern_body(1, "server/discover"),
+                headers=[*base, ("X-Forwarded-Host", "localhost:3000"), ("X-Forwarded-Host", "evil.example")],
+            )
+            comma_list = await client.post(
+                MCP_HTTP_PATH,
+                json=modern_body(2, "server/discover"),
+                headers=[*base, ("X-Forwarded-Host", "localhost:3000, evil.example")],
+            )
+            all_local = await client.post(
+                MCP_HTTP_PATH,
+                json=modern_body(3, "server/discover"),
+                headers=[*base, ("X-Forwarded-Host", "localhost:3000"), ("X-Forwarded-Host", "localhost:8080")],
+            )
+        assert two_headers.status_code == 421
+        assert comma_list.status_code == 421
+        assert_modern_discover(all_local)
+
+    @pytest.mark.parametrize(
+        ("value", "allowed"),
+        [
+            ("localhost:3000", True),
+            ("[::1]:3000", True),
+            ("resume.example", True),
+            ("localhost", False),
+            ("localhost:", False),
+            ("localhost:evil", False),
+            ("localhost:3000.evil.com", False),
+            ("127.0.0.1:8000.evil.com", False),
+            ("localhost:123456", False),
+            ("evil.example:3000", False),
+        ],
+    )
+    def test_host_patterns_require_numeric_port(self, value: str, allowed: bool) -> None:
+        patterns = ["localhost:*", "127.0.0.1:*", "[::1]:*", "resume.example"]
+        assert _host_allowed(value, patterns) is allowed
 
     async def test_forwarded_host_ignored_without_allow_list(self, enabled: None) -> None:
         async with served() as client:
@@ -505,8 +628,12 @@ class TestSettingsParsing:
         assert fresh.mcp_http_enabled is False
         assert fresh.mcp_auth_token.get_secret_value() == ""
         assert fresh.mcp_allow_no_auth is False
-        assert fresh.mcp_allowed_hosts == ["127.0.0.1:*", "localhost:*"]
-        assert fresh.mcp_allowed_origins == ["http://localhost:*", "http://127.0.0.1:*"]
+        assert fresh.mcp_allowed_hosts == ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+        assert fresh.mcp_allowed_origins == [
+            "http://localhost:*",
+            "http://127.0.0.1:*",
+            "http://[::1]:*",
+        ]
         assert fresh.mcp_allowed_forwarded_hosts == []
 
     def test_comma_separated_lists(self, monkeypatch: pytest.MonkeyPatch) -> None:

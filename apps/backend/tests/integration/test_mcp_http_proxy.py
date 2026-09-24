@@ -27,6 +27,7 @@ BASE_URL = os.environ.get("MCP_E2E_BASE_URL", "").rstrip("/")
 TOKEN = os.environ.get("MCP_E2E_TOKEN", "")
 MCP_URL = f"{BASE_URL}/api/v1/mcp"
 MODERN = "2026-07-28"
+LEGACY = "2025-11-25"
 DEFAULT_WAIT_BUDGET_SECONDS = 50.0
 ENVELOPE = {
     "io.modelcontextprotocol/protocolVersion": MODERN,
@@ -104,6 +105,29 @@ def test_modern_discover_and_tools_list_without_redirects(client: httpx.Client) 
     tools = listed.json()["result"]
     assert tools["ttlMs"] == 3_600_000
     assert [tool["name"] for tool in tools["tools"]][0] == "get_status"
+
+    legacy_headers = {
+        "Authorization": f"Bearer {TOKEN}",
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    initialize = client.post(
+        MCP_URL,
+        json={
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": LEGACY,
+                "capabilities": {},
+                "clientInfo": {"name": "proxy-e2e", "version": "1.0"},
+            },
+        },
+        headers=legacy_headers,
+    )
+    assert initialize.status_code == 200, (initialize.status_code, initialize.headers, initialize.text)
+    assert "mcp-session-id" not in initialize.headers
+    assert initialize.json()["result"]["protocolVersion"] == LEGACY
 
 
 def test_routing_headers_reach_backend_intact(client: httpx.Client) -> None:
