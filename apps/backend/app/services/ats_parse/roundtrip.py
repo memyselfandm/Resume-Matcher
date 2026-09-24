@@ -29,6 +29,8 @@ SHORT_FIELD_MAX_TOKENS = 2
 WINDOW_SLACK_TOKENS = 2
 # Templates may print an entry's date or location just before its title.
 ENTRY_BACK_SLACK_TOKENS = 8
+# Identity fields of one entry (title, company, ...) sit within this many tokens.
+ANCHOR_MAX_SPREAD_TOKENS = 30
 
 DEFAULT_SECTION_ORDER = (
     "summary",
@@ -224,19 +226,34 @@ def _anchor_entries(
     cursor = 0
     order = list(dict.fromkeys(field.entry for field in fields if field.entry))
     for entry in order:
-        best: tuple[int, int] | None = None
-        for field in fields:
-            if field.entry != entry or not field.anchor or field.hidden:
-                continue
-            needle = tokenize(normalize_text(field.value, source_html=True))
-            if not needle:
-                continue
-            ratio, position = _locate(needle, haystack, cursor)
-            if ratio == 1.0 and (best is None or position < best[0]):
-                best = (position, position + len(needle))
-        if best is not None:
-            anchors[entry] = best
-            cursor = best[1]
+        needles = [
+            needle
+            for field in fields
+            if field.entry == entry and field.anchor and not field.hidden
+            for needle in [tokenize(normalize_text(field.value, source_html=True))]
+            if needle
+        ]
+        starts = [
+            position
+            for needle in needles
+            for ratio, position in [_locate(needle, haystack, cursor)]
+            if ratio == 1.0
+        ]
+        if not starts:
+            continue
+        start = min(starts)
+        # Advance past every identity field of this entry found near its
+        # start, so a repeated employer or title is not reused by the next
+        # entry. The spread bound keeps a missing field from jumping ahead.
+        end = start
+        for needle in needles:
+            ratio, position = _locate(
+                needle, haystack, start, start + ANCHOR_MAX_SPREAD_TOKENS + len(needle)
+            )
+            if ratio == 1.0:
+                end = max(end, position + len(needle))
+        anchors[entry] = (start, end)
+        cursor = end
     return anchors
 
 
