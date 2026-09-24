@@ -23,6 +23,9 @@ FieldStatus = Literal["found", "garbled", "missing", "not_rendered", "hidden"]
 
 SEVERITY_PENALTIES: dict[str, int] = {"fatal": 100, "high": 20, "medium": 10, "low": 4}
 FATAL_SCORE_CAP = 10
+# Cap for a document whose pages were all skipped as too dense: nothing was
+# read, so a clean parseability score would overstate what is known.
+UNREAD_DOCUMENT_SCORE_CAP = 50
 EXTRACTED_TEXT_PREVIEW_CHARS = 1_000
 
 
