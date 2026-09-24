@@ -20,7 +20,14 @@ from app import __version__
 from app.ai_budget import operation_error_content
 from app.config import settings
 from app.database import DatabaseBusyError, db
-from app.mcp.http import MCP_HTTP_METHODS, MCP_HTTP_PATH, mcp_http_endpoint, mcp_http_lifespan
+from app.mcp.http import (
+    MCP_HTTP_METHODS,
+    MCP_HTTP_PATH,
+    MCP_HTTP_PATH_SLASH,
+    mcp_http_endpoint,
+    mcp_http_lifespan,
+    validate_mcp_http_settings,
+)
 from app.pdf import close_pdf_renderer, init_pdf_renderer
 from app.routers import (
     applications_router,
@@ -47,6 +54,8 @@ _configure_application_logging()
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application lifespan manager."""
     # Startup
+    # Refuse unsafe MCP HTTP settings before touching any data.
+    validate_mcp_http_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     # Import a legacy TinyDB database into SQLite if present (idempotent).
     # Fail-fast on error: starting with an empty DB would look like data loss.
@@ -62,26 +71,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     migrate_legacy_keys()
     # PDF renderer uses lazy initialization - will initialize on first use
     # await init_pdf_renderer()
-    # MCP over Streamable HTTP (off unless MCP_HTTP_ENABLED); fails startup
-    # when enabled without MCP_AUTH_TOKEN. Its tasks and bridge close before
-    # the drains below.
-    async with mcp_http_lifespan(app):
-        yield
-    # Shutdown - wrap each cleanup in try-except to ensure all resources are released
+    # MCP over Streamable HTTP (off unless MCP_HTTP_ENABLED). Its tasks and
+    # bridge close before the drains below; the drains run even if the MCP
+    # teardown fails.
     try:
-        await drain_processing_cleanup_tasks()
-    except Exception:
-        logger.exception("Error draining processing cleanup")
+        async with mcp_http_lifespan(app):
+            yield
+    finally:
+        # Shutdown - wrap each cleanup in try-except to ensure all resources are released
+        try:
+            await drain_processing_cleanup_tasks()
+        except Exception:
+            logger.exception("Error draining processing cleanup")
 
-    try:
-        await close_pdf_renderer()
-    except Exception as e:
-        logger.error(f"Error closing PDF renderer: {e}")
+        try:
+            await close_pdf_renderer()
+        except Exception as e:
+            logger.error(f"Error closing PDF renderer: {e}")
 
-    try:
-        await db.close()
-    except Exception as e:
-        logger.error(f"Error closing database: {e}")
+        try:
+            await db.close()
+        except Exception as e:
+            logger.error(f"Error closing database: {e}")
 
 
 app = FastAPI(
@@ -121,9 +132,8 @@ app.include_router(resume_wizard_router, prefix="/api/v1")
 # Exact route (no Mount): a trailing-slash redirect would loop through the
 # Next.js proxy. The endpoint resolves the current lifespan's session manager
 # per request and answers 404 while MCP over HTTP is disabled.
-app.add_route(
-    MCP_HTTP_PATH, mcp_http_endpoint, methods=MCP_HTTP_METHODS, include_in_schema=False
-)
+for _mcp_path in (MCP_HTTP_PATH, MCP_HTTP_PATH_SLASH):
+    app.add_route(_mcp_path, mcp_http_endpoint, methods=MCP_HTTP_METHODS, include_in_schema=False)
 
 
 @app.get("/")

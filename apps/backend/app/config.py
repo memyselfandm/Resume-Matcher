@@ -395,10 +395,15 @@ class Settings(BaseSettings):
     mcp_http_enabled: bool = False
     mcp_auth_token: SecretStr = SecretStr("")
     mcp_allow_no_auth: bool = False
-    mcp_allowed_hosts: Annotated[list[str], NoDecode] = ["127.0.0.1:*", "localhost:*"]
+    mcp_allowed_hosts: Annotated[list[str], NoDecode] = [
+        "127.0.0.1:*",
+        "localhost:*",
+        "[::1]:*",
+    ]
     mcp_allowed_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:*",
         "http://127.0.0.1:*",
+        "http://[::1]:*",
     ]
     mcp_allowed_forwarded_hosts: Annotated[list[str], NoDecode] = []
 

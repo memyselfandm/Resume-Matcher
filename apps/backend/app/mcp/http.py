@@ -20,6 +20,7 @@ Security layers, in order:
 
 import hmac
 import logging
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -37,9 +38,14 @@ from app.mcp.server import build_mcp_server
 logger = logging.getLogger(__name__)
 
 MCP_HTTP_PATH = "/api/v1/mcp"
+# Served too, so a trailing slash never triggers a redirect (which would run
+# before auth and expose the backend's internal address).
+MCP_HTTP_PATH_SLASH = MCP_HTTP_PATH + "/"
 MCP_HTTP_METHODS = ["POST", "GET", "DELETE"]
 # base64 of a 4 MB upload is ~5.6 MB, above the SDK's 4 MiB default.
 MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024
+MIN_TOKEN_LENGTH = 32
+_PORT = re.compile(r"[0-9]{1,5}")
 
 
 class MCPHTTPConfigurationError(RuntimeError):
@@ -61,13 +67,43 @@ def _configured_token() -> bytes | None:
     return token.encode("utf-8") if token else None
 
 
+def validate_mcp_http_settings() -> None:
+    """Refuse unsafe HTTP transport settings; a no-op while disabled.
+
+    Called at the very start of the app lifespan (before data migrations) and
+    again by ``mcp_http_lifespan``.
+
+    Raises:
+        MCPHTTPConfigurationError: If enabled without ``MCP_AUTH_TOKEN`` (unless
+            ``MCP_ALLOW_NO_AUTH`` is set) or with a token shorter than
+            ``MIN_TOKEN_LENGTH`` characters.
+    """
+    if not settings.mcp_http_enabled:
+        return
+    token = settings.mcp_auth_token.get_secret_value().strip()
+    message = None
+    if not token and not settings.mcp_allow_no_auth:
+        message = (
+            "MCP_HTTP_ENABLED is set but MCP_AUTH_TOKEN is empty. Set MCP_AUTH_TOKEN "
+            "(for example: openssl rand -hex 32), or set MCP_ALLOW_NO_AUTH=1 to serve "
+            "MCP without authentication (unsafe)."
+        )
+    elif token and len(token) < MIN_TOKEN_LENGTH:
+        message = (
+            f"MCP_AUTH_TOKEN is too short ({len(token)} characters); use at least "
+            f"{MIN_TOKEN_LENGTH}, for example the output of: openssl rand -hex 32"
+        )
+    if message is not None:
+        logger.error(message)
+        raise MCPHTTPConfigurationError(message)
+
+
 @asynccontextmanager
 async def mcp_http_lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Serve MCP over HTTP for one app lifespan when enabled.
 
     Raises:
-        MCPHTTPConfigurationError: If enabled without ``MCP_AUTH_TOKEN`` and
-            without the explicit ``MCP_ALLOW_NO_AUTH`` opt-out.
+        MCPHTTPConfigurationError: See ``validate_mcp_http_settings``.
     """
     app.state.mcp_session_manager = None
     app.state.mcp_auth_token = None
@@ -75,15 +111,9 @@ async def mcp_http_lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
         return
 
+    validate_mcp_http_settings()
     token = _configured_token()
     if token is None:
-        if not settings.mcp_allow_no_auth:
-            message = (
-                "MCP_HTTP_ENABLED is set but MCP_AUTH_TOKEN is empty. Set MCP_AUTH_TOKEN, "
-                "or set MCP_ALLOW_NO_AUTH=1 to serve MCP without authentication (unsafe)."
-            )
-            logger.error(message)
-            raise MCPHTTPConfigurationError(message)
         logger.warning(
             "MCP HTTP transport enabled WITHOUT authentication (MCP_ALLOW_NO_AUTH=1). "
             "Anyone who can reach %s can read and modify resumes and spend LLM credits.",
@@ -116,12 +146,14 @@ async def mcp_http_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def _host_allowed(value: str, allowed: list[str]) -> bool:
-    """Match ``value`` exactly or against ``host:*`` wildcard-port patterns."""
+    """Match ``value`` exactly or against ``host:*`` patterns (numeric port only)."""
     for pattern in allowed:
         if value == pattern:
             return True
-        if pattern.endswith(":*") and value.startswith(pattern[:-1]):
-            return True
+        if pattern.endswith(":*"):
+            prefix = pattern[:-1]
+            if value.startswith(prefix) and _PORT.fullmatch(value[len(prefix) :]):
+                return True
     return False
 
 
@@ -162,11 +194,14 @@ class MCPHTTPEndpoint:
             return
 
         allowed_forwarded = settings.mcp_allowed_forwarded_hosts
-        forwarded_host = headers.get("x-forwarded-host")
-        if allowed_forwarded and forwarded_host is not None:
-            hosts = [value.strip() for value in forwarded_host.split(",")]
-            if not all(_host_allowed(value, allowed_forwarded) for value in hosts):
-                logger.warning("Rejected MCP request with X-Forwarded-Host %r", forwarded_host[:256])
+        forwarded_values = headers.getlist("x-forwarded-host")
+        if allowed_forwarded and forwarded_values:
+            # Every value of every header must match; a proxy chain may append.
+            hosts = [part.strip() for value in forwarded_values for part in value.split(",")]
+            if not all(_host_allowed(host, allowed_forwarded) for host in hosts):
+                logger.warning(
+                    "Rejected MCP request with X-Forwarded-Host %r", ", ".join(forwarded_values)[:256]
+                )
                 await JSONResponse(
                     {"detail": "Invalid X-Forwarded-Host header"}, status_code=421
                 )(scope, receive, send)
