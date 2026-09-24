@@ -8,6 +8,7 @@ import re
 import tempfile
 import zipfile
 import zlib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, BinaryIO, Sequence
 
@@ -55,7 +56,7 @@ MAX_PDF_SCANLINE_COLUMNS = 32_768
 MAX_PDF_SCANLINE_BYTES = 256 * 1024
 DOCUMENT_CONVERSION_WORKERS = 2
 DOCUMENT_CONVERSION_TIMEOUT_SECONDS = 120.0
-_DOCUMENT_BACKGROUND_WORKERS: set[asyncio.Task[str]] = set()
+_DOCUMENT_BACKGROUND_WORKERS: set[asyncio.Task[Any]] = set()
 _DOCUMENT_CONVERSION_LIMITER = anyio.CapacityLimiter(DOCUMENT_CONVERSION_WORKERS)
 
 
@@ -70,7 +71,7 @@ class DocumentResourceLimitError(ValueError):
 _COMPOUND_FILE_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
 
 
-class _PDFDecodeBudget:
+class PDFDecodeBudget:
     """Track decoded PDF stream bytes across one parser instance."""
 
     def __init__(self) -> None:
@@ -276,7 +277,7 @@ def _decode_pdf_stream(
 class _BoundedPDFStream(PDFStream):
     """PDF stream whose decoder charges a request-local shared budget."""
 
-    def __init__(self, stream: PDFStream, budget: _PDFDecodeBudget) -> None:
+    def __init__(self, stream: PDFStream, budget: PDFDecodeBudget) -> None:
         super().__init__(stream.attrs, stream.rawdata, stream.decipher)
         self._budget = budget
 
@@ -295,10 +296,10 @@ class _BoundedPDFStream(PDFStream):
         self.rawdata = None
 
 
-class _BoundedPDFParser(PDFParser):
+class BoundedPDFParser(PDFParser):
     """Install bounded streams locally without patching pdfminer globals."""
 
-    def __init__(self, stream: BinaryIO, budget: _PDFDecodeBudget) -> None:
+    def __init__(self, stream: BinaryIO, budget: PDFDecodeBudget) -> None:
         super().__init__(stream)
         self._budget = budget
 
@@ -314,12 +315,22 @@ class _BoundedPDFParser(PDFParser):
                 )
 
 
+def open_bounded_pdf(stream: BinaryIO) -> PDFDocument:
+    """Open a PDF whose stream decoding is charged to one fresh decode budget.
+
+    Every stream the returned document decodes (content streams, fonts, forms)
+    shares the 16MB expansion limit and raises ``DocumentResourceLimitError``
+    when it is exceeded.
+    """
+    return PDFDocument(BoundedPDFParser(stream, PDFDecodeBudget()))
+
+
 def _validate_pdf_container(path: Path) -> None:
     """Require a readable PDF whose decoded streams fit a shared budget."""
     try:
         with path.open("rb") as stream:
-            budget = _PDFDecodeBudget()
-            document = PDFDocument(_BoundedPDFParser(stream, budget))
+            budget = PDFDecodeBudget()
+            document = PDFDocument(BoundedPDFParser(stream, budget))
             manager = PDFResourceManager(caching=False)
             interpreter = PDFPageInterpreter(manager, PDFDevice(manager))
             has_pages = False
@@ -351,7 +362,7 @@ def _validate_pdf_container(path: Path) -> None:
         ) from exc
 
 
-def _validate_docx_container(path: Path) -> None:
+def validate_docx_container(path: Path) -> None:
     """Require a bounded, readable Office Open XML word-processing package."""
     try:
         with zipfile.ZipFile(path) as archive:
@@ -400,7 +411,7 @@ def _validate_docx_container(path: Path) -> None:
         ) from exc
 
 
-def _validate_doc_container(path: Path) -> None:
+def validate_doc_container(path: Path) -> None:
     """Validate the fixed compound-file header used by legacy Word documents."""
     try:
         with path.open("rb") as stream:
@@ -734,9 +745,9 @@ def _parse_document_sync(content: bytes, filename: str) -> str:
         if suffix == ".pdf":
             _validate_pdf_container(tmp_path)
         elif suffix == ".doc":
-            _validate_doc_container(tmp_path)
+            validate_doc_container(tmp_path)
         elif suffix == ".docx":
-            _validate_docx_container(tmp_path)
+            validate_docx_container(tmp_path)
         md = MarkItDown()
         result = md.convert(str(tmp_path))
         text = result.text_content
@@ -759,32 +770,37 @@ def _validate_parsed_resume(result: dict[str, Any]) -> dict[str, Any]:
     return parsed_data
 
 
-async def parse_document(content: bytes, filename: str) -> str:
-    """Convert a bounded PDF/DOC/DOCX without blocking the request event loop.
+async def run_bounded_document_worker[T](
+    func: Callable[..., T],
+    *args: Any,
+    timeout_seconds: float,
+    limiter: anyio.CapacityLimiter | None = None,
+    label: str = "Document conversion",
+) -> T:
+    """Run blocking document work under a capacity limiter and a hard deadline.
 
-    Args:
-        content: Raw file bytes
-        filename: Original filename for extension detection
-
-    Returns:
-        Markdown text content
+    ``limiter`` defaults to the upload conversion limiter; other document
+    features pass their own so they cannot starve resume uploads. The
+    caller's deadline covers both queueing and execution. ``label`` names the
+    work in logs about workers that outlive their caller.
     """
-    deadline = asyncio.get_running_loop().time() + DOCUMENT_CONVERSION_TIMEOUT_SECONDS
+    admission = limiter or _DOCUMENT_CONVERSION_LIMITER
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
     borrower = object()
     # Queued requests still belong to their caller. Only an admitted conversion
     # can outlive cancellation; abandoned queues never retain file bytes or run.
     await asyncio.wait_for(
-        _DOCUMENT_CONVERSION_LIMITER.acquire_on_behalf_of(borrower),
-        timeout=DOCUMENT_CONVERSION_TIMEOUT_SECONDS,
+        admission.acquire_on_behalf_of(borrower),
+        timeout=timeout_seconds,
     )
 
-    async def run_admitted_worker() -> str:
+    async def run_admitted_worker() -> T:
         try:
             return await anyio.to_thread.run_sync(
-                _parse_document_sync, content, filename, abandon_on_cancel=False
+                func, *args, abandon_on_cancel=False
             )
         finally:
-            _DOCUMENT_CONVERSION_LIMITER.release_on_behalf_of(borrower)
+            admission.release_on_behalf_of(borrower)
 
     worker = asyncio.create_task(run_admitted_worker())
     try:
@@ -797,18 +813,34 @@ async def parse_document(content: bytes, filename: str) -> str:
         # the worker retains its limiter slot and owns its tempfile until done.
         _DOCUMENT_BACKGROUND_WORKERS.add(worker)
 
-        def consume_result(done: asyncio.Task[str]) -> None:
+        def consume_result(done: asyncio.Task[Any]) -> None:
             _DOCUMENT_BACKGROUND_WORKERS.discard(done)
             if not done.cancelled():
                 try:
                     done.result()
                 except Exception:
-                    logger.exception(
-                        "Document conversion failed after request cancellation"
-                    )
+                    logger.exception("%s failed after request cancellation", label)
 
         worker.add_done_callback(consume_result)
         raise
+
+
+async def parse_document(content: bytes, filename: str) -> str:
+    """Convert a bounded PDF/DOC/DOCX without blocking the request event loop.
+
+    Args:
+        content: Raw file bytes
+        filename: Original filename for extension detection
+
+    Returns:
+        Markdown text content
+    """
+    return await run_bounded_document_worker(
+        _parse_document_sync,
+        content,
+        filename,
+        timeout_seconds=DOCUMENT_CONVERSION_TIMEOUT_SECONDS,
+    )
 
 
 async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:
