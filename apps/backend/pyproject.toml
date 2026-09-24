@@ -67,4 +67,5 @@ markers = [
     "service: service layer tests with mocked LLM",
     "integration: API endpoint tests with httpx AsyncClient",
     "eval: prompt-quality evaluations; may call a real LLM, skipped without a configured key",
+    "e2e: end-to-end tests against running servers; skipped unless their environment variables are set",
 ]

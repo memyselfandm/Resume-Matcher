@@ -20,6 +20,7 @@ from app import __version__
 from app.ai_budget import operation_error_content
 from app.config import settings
 from app.database import DatabaseBusyError, db
+from app.mcp.http import MCP_HTTP_METHODS, MCP_HTTP_PATH, mcp_http_endpoint, mcp_http_lifespan
 from app.pdf import close_pdf_renderer, init_pdf_renderer
 from app.routers import (
     applications_router,
@@ -61,7 +62,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     migrate_legacy_keys()
     # PDF renderer uses lazy initialization - will initialize on first use
     # await init_pdf_renderer()
-    yield
+    # MCP over Streamable HTTP (off unless MCP_HTTP_ENABLED); fails startup
+    # when enabled without MCP_AUTH_TOKEN. Its tasks and bridge close before
+    # the drains below.
+    async with mcp_http_lifespan(app):
+        yield
     # Shutdown - wrap each cleanup in try-except to ensure all resources are released
     try:
         await drain_processing_cleanup_tasks()
@@ -113,6 +118,12 @@ app.include_router(jobs_router, prefix="/api/v1")
 app.include_router(enrichment_router, prefix="/api/v1")
 app.include_router(applications_router, prefix="/api/v1")
 app.include_router(resume_wizard_router, prefix="/api/v1")
+# Exact route (no Mount): a trailing-slash redirect would loop through the
+# Next.js proxy. The endpoint resolves the current lifespan's session manager
+# per request and answers 404 while MCP over HTTP is disabled.
+app.add_route(
+    MCP_HTTP_PATH, mcp_http_endpoint, methods=MCP_HTTP_METHODS, include_in_schema=False
+)
 
 
 @app.get("/")

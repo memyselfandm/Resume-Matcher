@@ -32,12 +32,15 @@ class StdioServer:
         self.stdout_lines: list[str] = []
 
     @classmethod
-    async def start(cls, data_dir: Path, cwd: Path) -> "StdioServer":
+    async def start(
+        cls, data_dir: Path, cwd: Path, extra_env: dict[str, str] | None = None
+    ) -> "StdioServer":
         env = {
             **os.environ,
             "DATA_DIR": str(data_dir),
             "PYTHONPATH": str(BACKEND_DIR),
             "LOG_LEVEL": "INFO",
+            **(extra_env or {}),
         }
         process = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -180,3 +183,20 @@ async def test_handshake_client_initializes_and_lists_tools(tmp_path: Path) -> N
     assert names[0] == "get_status"
     # Cache hints are 2026-07-28 vocabulary and are sieved from older eras.
     assert "ttlMs" not in listed["result"]
+
+
+async def test_stdio_ignores_http_transport_settings(tmp_path: Path) -> None:
+    """MCP_HTTP_ENABLED without a token must not stop the stdio entry point."""
+    server = await StdioServer.start(
+        tmp_path / "data",
+        tmp_path,
+        extra_env={"MCP_HTTP_ENABLED": "1", "MCP_AUTH_TOKEN": "", "MCP_ALLOW_NO_AUTH": "0"},
+    )
+    try:
+        discover = await server.request(1, "server/discover", {"_meta": ENVELOPE})
+    finally:
+        code, stderr = await server.close()
+
+    assert code == 0, stderr
+    assert MODERN in discover["result"]["supportedVersions"]
+    assert "MCP Streamable HTTP transport serving" not in stderr
