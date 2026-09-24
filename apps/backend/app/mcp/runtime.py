@@ -51,6 +51,9 @@ class MCPRuntime:
     previews: PreviewCache = field(default_factory=PreviewCache)
     tasks: TaskRegistry = field(default_factory=TaskRegistry)
     heartbeat_interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS
+    # Idempotency key -> task_id, so a retried call joins the in-flight (or
+    # finished) task instead of issuing a second request.
+    keyed_tasks: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def create(cls, app: FastAPI, transport: Transport) -> "MCPRuntime":
@@ -92,17 +95,33 @@ class MCPRuntime:
         operation: Callable[[], Awaitable[dict[str, Any]]],
         wait_seconds: float | None,
         ctx: Context | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Run ``operation`` as a task and wait for it within the wait budget.
 
         Returns the operation's result (plus ``status``/``task_id``) when it
         finishes in time, otherwise ``{"status": "running", "task_id": ...}``
-        for polling with ``get_task``.
+        for polling with ``get_task``. With ``idempotency_key``, a call made
+        while an earlier task for the same key is running or has succeeded
+        waits on that task instead of starting another.
 
         Raises:
             ToolError: If the operation fails or is cancelled within the wait.
         """
-        record = self.tasks.start(name, operation)
+        record = None
+        if idempotency_key is not None:
+            task_id = self.keyed_tasks.get(idempotency_key)
+            existing = self.tasks.get(task_id) if task_id is not None else None
+            if existing is not None and existing.status in ("running", "succeeded"):
+                record = existing
+        if record is None:
+            record = self.tasks.start(name, operation)
+            if idempotency_key is not None:
+                # Forget keys whose tasks have expired from the registry.
+                for key, task_id in list(self.keyed_tasks.items()):
+                    if self.tasks.get(task_id) is None:
+                        del self.keyed_tasks[key]
+                self.keyed_tasks[idempotency_key] = record.task_id
         budget = self.resolve_wait_seconds(wait_seconds)
         loop = asyncio.get_running_loop()
         started = loop.time()

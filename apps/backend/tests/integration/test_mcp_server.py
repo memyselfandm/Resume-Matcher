@@ -345,6 +345,52 @@ class TestTailoringFlow:
         ]
         assert len(cards) == 1
 
+    async def test_confirm_retry_while_running_joins_the_same_task(
+        self, isolated_db: Database, sample_resume: dict[str, Any]
+    ) -> None:
+        improved = tailored_resume(sample_resume)
+
+        async def slow_title(*args: Any, **kwargs: Any) -> str:
+            await asyncio.sleep(1.0)
+            return "Senior Backend Engineer - TechCorp"
+
+        async with mcp_session() as (client, _):
+            resume_id, job_id = await upload_and_add_job(
+                client, sample_resume, "Senior Backend Engineer: Python, FastAPI."
+            )
+            with mocked_tailoring(improved):
+                preview_id = payload(
+                    await client.call_tool(
+                        "tailor_resume_preview", {"resume_id": resume_id, "job_id": job_id}
+                    )
+                )["preview_id"]
+                with patch("app.routers.resumes.generate_resume_title", slow_title):
+                    first = payload(
+                        await client.call_tool(
+                            "tailor_resume_confirm", {"preview_id": preview_id, "wait_seconds": 0.2}
+                        )
+                    )
+                    retry = await client.call_tool(
+                        "tailor_resume_confirm", {"preview_id": preview_id, "wait_seconds": 0}
+                    )
+                    assert retry.is_error is False, retry.content
+                    retry_body = payload(retry)
+                    finished = await poll_task(client, first["task_id"])
+                after = payload(
+                    await client.call_tool("tailor_resume_confirm", {"preview_id": preview_id})
+                )
+
+        assert first["status"] == "running"
+        assert retry_body["status"] == "running"
+        assert retry_body["task_id"] == first["task_id"]
+        assert finished["status"] == "succeeded"
+        tailored_id = finished["result"]["tailored_resume_id"]
+        assert after["tailored_resume_id"] == tailored_id
+        assert after["application_id"] == finished["result"]["application_id"]
+        assert (await isolated_db.get_stats())["total_resumes"] == 2
+        cards = [c for c in await isolated_db.list_applications() if c["resume_id"] == tailored_id]
+        assert len(cards) == 1
+
     async def test_preview_cache_miss_is_tool_error(self, isolated_db: Database) -> None:
         async with mcp_session() as (client, _):
             result = await client.call_tool("tailor_resume_confirm", {"preview_id": "unknown-preview"})

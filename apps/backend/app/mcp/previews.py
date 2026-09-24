@@ -76,10 +76,6 @@ class PreviewCache:
         self._entries.move_to_end(preview_id)
         return preview
 
-    def discard(self, preview_id: str) -> None:
-        """Drop a preview (after a successful confirmation)."""
-        self._entries.pop(preview_id, None)
-
     def _evict_expired(self) -> None:
         now = self._clock()
         for preview_id in [key for key, value in self._entries.items() if value.expires_at <= now]:
