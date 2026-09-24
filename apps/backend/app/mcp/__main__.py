@@ -29,6 +29,10 @@ async def _main() -> None:
     from app.mcp.runtime import MCPRuntime
     from app.mcp.server import build_mcp_server
 
+    # This process speaks stdio only; never start the HTTP transport here.
+    # Mutating the settings singleton is intentionally process-wide: this
+    # process is dedicated to one stdio client.
+    settings.mcp_http_enabled = False
     async with app.router.lifespan_context(app):
         runtime = MCPRuntime.create(app, transport="stdio")
         server = build_mcp_server(runtime)

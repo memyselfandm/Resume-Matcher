@@ -7,10 +7,10 @@ import stat
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 ALLOWED_LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG")
@@ -388,6 +388,37 @@ class Settings(BaseSettings):
         if url and url not in origins:
             origins.append(url)
         return origins
+
+    # MCP Streamable HTTP transport (served at /api/v1/mcp, off by default).
+    # The bearer token is the primary control; Host/Origin/X-Forwarded-Host
+    # allow-lists are defense in depth. List values are comma-separated.
+    mcp_http_enabled: bool = False
+    mcp_auth_token: SecretStr = SecretStr("")
+    mcp_allow_no_auth: bool = False
+    mcp_allowed_hosts: Annotated[list[str], NoDecode] = [
+        "127.0.0.1:*",
+        "localhost:*",
+        "[::1]:*",
+    ]
+    mcp_allowed_origins: Annotated[list[str], NoDecode] = [
+        "http://localhost:*",
+        "http://127.0.0.1:*",
+        "http://[::1]:*",
+    ]
+    mcp_allowed_forwarded_hosts: Annotated[list[str], NoDecode] = []
+
+    @field_validator(
+        "mcp_allowed_hosts",
+        "mcp_allowed_origins",
+        "mcp_allowed_forwarded_hosts",
+        mode="before",
+    )
+    @classmethod
+    def split_comma_separated(cls, v: Any) -> Any:
+        """Accept comma-separated strings for MCP allow-lists."""
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
 
     # Paths
     data_dir: Path = Path(__file__).parent.parent / "data"
