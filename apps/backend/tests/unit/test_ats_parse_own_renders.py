@@ -137,16 +137,9 @@ def test_hidden_section_is_hidden_not_missing(template: str) -> None:
 def test_two_column_additional_heading_is_not_rendered(template: str) -> None:
     """Two-column templates print fixed per-list headings instead."""
     assert _fields(template)["heading.additional"] == "not_rendered"
-    missing = {
-        path
-        for path, status in _fields(template).items()
-        if path.startswith("additional.") and status == "missing"
+    assert "missing" not in {
+        status for path, status in _fields(template).items() if path.startswith("additional.")
     }
-    # With the Linux image's fonts the sidebar's "PostgreSQL" extracts as
-    # "PostgreSQ L" in the swiss two-column layouts (a kerning gap read as a
-    # word break); vivid separates its skills with bullets and is unaffected.
-    split_skill = manifest()["platform"] == "linux" and template != "vivid"
-    assert missing == ({"additional.technicalSkills[2]"} if split_skill else set())
 
 
 def test_spanish_render_locale_keeps_english_checks_and_spanish_headings() -> None:
@@ -202,32 +195,42 @@ def test_small_caps_titles_depend_on_the_renderer_font(template: str) -> None:
     else:
         assert icon_glyphs.status == "pass"
         assert "SENIOR SOFTWARE ENGINEER" in _text(template)
-        if template == "clean":
-            assert title == "found"
+        assert title == "found"
 
 
-def test_letter_spaced_headings_extract_as_spaced_letters() -> None:
-    """clean's section headings use ``letter-spacing: 0.12em``: the extractor
-    reads the gaps as word breaks, so the headings are not found."""
+def test_letter_spaced_headings_are_read_as_words() -> None:
+    """clean's section headings use ``letter-spacing: 0.12em``; the uniform
+    gaps are the line's typical gap, not word breaks."""
     text = _text("clean")
-    assert "SUMMARY" not in text and "Summary" not in text
+    for heading in ("SUMMARY", "EXPERIENCE", "EDUCATION", "PUBLICATIONS"):
+        assert heading in text
     fields = _fields("clean")
-    for key in ("summary", "education", "personalProjects", "publications"):
-        assert fields[f"heading.{key}"] == "missing"
-    assert _checks("clean")["section_headings"].status == "fail"
+    for key in ("summary", "workExperience", "education", "personalProjects", "publications"):
+        assert fields[f"heading.{key}"] == "found"
+    assert _checks("clean")["section_headings"].status == "pass"
 
 
-def test_vivid_header_kerning_gaps_split_words_on_linux() -> None:
-    """vivid's header and uppercase headings are tightly kerned in the Linux
-    image's fonts; the extractor reads some kerning gaps as word breaks, so the
-    header email does not survive the round trip (macOS renders keep it)."""
-    fields = _fields("vivid")
-    if manifest()["platform"] == "linux":
-        assert "jo rdan.rivera@example.co m" in _text("vivid")
-        assert fields["personalInfo.email"] == "missing"
-        assert fields["heading.education"] == "missing"
-    else:
-        assert fields["personalInfo.email"] == "found"
+@pytest.mark.parametrize(
+    ("template", "words"),
+    [
+        ("vivid", ("jordan.rivera@example.com", "EDUCATION", "LANGUAGES", "PUBLICATIONS")),
+        ("swiss-two-column", ("EDUCATION", "PostgreSQL")),
+        ("modern-two-column", ("EDUCATION", "PostgreSQL")),
+    ],
+)
+def test_kerning_gaps_do_not_split_words(template: str, words: tuple[str, ...]) -> None:
+    """Tightly kerned capitals and vivid's header (wide kerning gaps with the
+    Linux image's fonts) stay whole, as pdftotext reads them."""
+    text = _text(template)
+    for word in words:
+        assert word in text
+    assert _fields(template)["personalInfo.email"] == "found"
+
+
+def test_word_gap_without_a_space_glyph_is_a_break() -> None:
+    """The two-column education line draws " | " as its own span with no
+    space glyph; that gap still separates the words."""
+    assert "University | Aug 2011" in _text("swiss-two-column")
 
 
 def test_real_render_report_is_byte_identical_across_runs() -> None:
