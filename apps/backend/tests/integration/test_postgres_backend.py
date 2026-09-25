@@ -27,7 +27,7 @@ from app import crypto
 from app.database import POSTGRES_WRITER_LOCK_KEY, Database, DatabaseBusyError
 from app.db_engine import init_models_sync, make_sync_engine
 from app.main import app
-from app.models import Application, Job, Resume, TailoringPreview
+from app.models import Application, Base, Job, Resume, TailoringPreview
 from app.scripts import migrate_sqlite_to_postgres as pg_migration
 from tests.integration.test_manual_application_transactions import MANUAL_CARD
 from tests.integration.test_storage_busy_writes import fast_busy_database  # noqa: F401
@@ -80,6 +80,7 @@ async def test_both_engines_run_read_committed_with_bounded_lock_wait(
 def test_additive_migration_is_idempotent_on_postgres(isolated_db: Database) -> None:
     """PostgreSQL counterpart of the sqlite_only PRAGMA table_info migrations."""
     with side_engine(isolated_db) as engine:
+        Base.metadata.drop_all(engine)  # start from the pre-migration layout
         with engine.begin() as connection:
             connection.exec_driver_sql(
                 "CREATE TABLE resumes (resume_id TEXT PRIMARY KEY, "
@@ -328,8 +329,11 @@ async def test_failed_manual_card_rolls_back_job_under_later_contention(
 
 # -- timestamp collation ------------------------------------------------------
 
-# Zero-microsecond ISO strings omit ".ffffff"; byte order still sorts them
-# chronologically ('+' < '.' < digits), linguistic collations do not.
+# App-written values are UTC ``isoformat()`` strings; zero-microsecond values
+# omit ".ffffff". The last two are client-style ISO strings (``applied_at`` is
+# user-supplied) whose relative order differs between glibc's en_US collation,
+# which ignores punctuation, and byte order. They make the guard below
+# meaningful: without ``COLLATE "C"`` this ordering would not match ``sorted()``.
 _TIMESTAMPS = [
     "2026-01-01T00:00:00.500000+00:00",
     "2026-01-01T00:00:00+00:00",
@@ -337,6 +341,8 @@ _TIMESTAMPS = [
     "2026-01-01T00:00:01+00:00",
     "2026-01-01T00:00:00.000001+00:00",
     "2026-01-01T00:00:00.999999+00:00",
+    "2026-01-01T00:00:00.000001Z",
+    "2026-01-01T00:00:00-05:00",
 ]
 
 
@@ -379,6 +385,20 @@ async def test_iso_timestamps_order_by_bytes_under_a_non_c_database_collation(
 
     listed = [row["created_at"] for row in await isolated_db.list_resumes()]
     assert listed == sorted(_TIMESTAMPS)
+    async with isolated_db._session() as session:
+        collations = set(
+            (
+                await session.execute(
+                    text(
+                        "SELECT collation_name FROM information_schema.columns "
+                        "WHERE table_schema = current_schema() AND column_name IN "
+                        "('created_at', 'updated_at', 'expires_at', "
+                        "'claim_expires_at', 'applied_at')"
+                    )
+                )
+            ).scalars()
+        )
+    assert collations == {"C"}
     pivot = "2026-01-01T00:00:00+00:00"
     async with isolated_db._session() as session:
         later = await session.scalar(
@@ -516,3 +536,23 @@ async def test_sqlite_to_postgres_migration_round_trip(
             pg_migration.migrate, sqlite_path, isolated_db.database_url, force=True
         )
     assert await _snapshot(isolated_db) == expected
+
+
+async def test_startup_skips_the_tinydb_import_on_postgres(
+    isolated_db: Database,
+) -> None:
+    """Counterpart of the sqlite_only real-startup TinyDB migration test."""
+    from tinydb import TinyDB
+
+    from app.config import settings
+
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    legacy = TinyDB(settings.db_path)
+    try:
+        legacy.table("resumes").insert({"resume_id": "legacy", "content": "x"})
+    finally:
+        legacy.close()
+    async with app.router.lifespan_context(app):
+        assert await isolated_db.get_resume("legacy") is None
+    assert settings.db_path.exists()
+    assert not settings.db_path.with_suffix(".json.migrated").exists()

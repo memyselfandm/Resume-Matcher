@@ -11,9 +11,8 @@ from typing import Any, NoReturn
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
-from sqlalchemy.pool import NullPool
 
 
 # Set DATA_DIR before pytest imports any test module. Several integration tests
@@ -48,8 +47,14 @@ def _postgres_admin(statement: str) -> None:
     global _postgres_admin_engine
     assert _TEST_DATABASE_URL is not None
     if _postgres_admin_engine is None:
+        # One reused connection: a fresh TCP connection per statement exhausts
+        # ephemeral ports over a full run against a remote server.
         _postgres_admin_engine = create_engine(
-            _TEST_DATABASE_URL, poolclass=NullPool, isolation_level="AUTOCOMMIT"
+            _TEST_DATABASE_URL,
+            pool_size=1,
+            max_overflow=0,
+            pool_pre_ping=True,
+            isolation_level="AUTOCOMMIT",
         )
     with _postgres_admin_engine.connect() as connection:
         connection.exec_driver_sql(statement)
@@ -149,6 +154,12 @@ async def isolated_backend_state(
         schema = f"test_{uuid4().hex}"
         _postgres_admin(f'CREATE SCHEMA "{schema}"')
         test_db = Database(database_url=postgres_schema_url(schema))
+        # Create the schema's tables now: over a network connection that DDL
+        # takes long enough to consume the sub-second AI deadlines some tests
+        # set if it ran lazily inside the request under test.
+        test_db._ensure_initialized()
+        async with test_db._session() as session:
+            await session.execute(text("SELECT 1"))  # open the async pool too
     else:
         test_db = Database(db_path=test_data_dir / "resume_matcher.db")
 
