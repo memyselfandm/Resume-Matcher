@@ -50,7 +50,21 @@ Rotated or skewed lines (a diagonal "DRAFT" watermark, a vertical side label)
 are kept in the text, each as its own row after the page's rows, but take no
 part in row reconstruction or the layout checks: their bounding box spans the
 page diagonally and would otherwise merge into body rows and block every
-gutter band (`rotated_watermark.pdf`).
+gutter band (`rotated_watermark.pdf`). Rotation is judged as displayed,
+including the page's `/Rotate`: a landscape page drawn to display upright is
+analyzed normally, but text that displays sideways (upright content on a
+`/Rotate 90` or `270` page) is unsupported for layout analysis, since
+pdfminer lays it out one glyph per line. Sheared text (synthetic italic) is
+not rotated.
+
+Word breaks: Chromium often draws words without space glyphs, so the line
+text is rebuilt from glyph positions. A gap is a word break when it exceeds
+the line's typical inter-glyph gap (its median, from lines with 4 or more
+glyph pairs, capped at 0.25) by 0.15 of the glyph size; pdfminer's single
+absolute `word_margin` read kerning gaps in capitals (`EDUCAT ION`) and CSS
+letter spacing (`S U M M A R Y`) as breaks that pdftotext does not. On the
+real template renders gaps inside words reach 0.11 above the line's typical
+gap and the narrowest gap between words is 0.19.
 
 | Status | Meaning |
 |--------|---------|
@@ -174,9 +188,10 @@ print URL are the download route's own. Nothing is stored.
   renders sequentially (at most one renderer slot) and marks its renders as
   background work: after a user download is refused as busy, it starts no
   render for 10 s, so a user who retries gets the slot before the next
-  template. With `PDF_MAX_CONCURRENCY=1` it also never retries a busy
-  renderer, since the only slot is then a user's. Waiting counts against the
-  budget; templates it cannot reach are `timed_out`.
+  template. With `PDF_MAX_CONCURRENCY=1` a busy slot is a user's download, so
+  instead of three attempts the check polls it every second until it frees
+  (`render_attempts` counts the polls). Waiting counts against the budget;
+  templates it cannot reach are `timed_out`.
 
 Response:
 
@@ -266,37 +281,34 @@ HTML bullets, a visible and a hidden custom section:
 | Template | multi_column | sidebar | expected_by_template | content_recall | order_fidelity | overall | content |
 |----------|--------------|---------|----------------------|----------------|----------------|---------|---------|
 | swiss-single | pass | pass | false | 1.000 | 0.993 | 100 | 100 |
-| swiss-two-column | fail | not_applicable | true | 0.912 | 0.752 | 90 | 90 |
+| swiss-two-column | fail | not_applicable | true | 0.947 | 0.729 | 90 | 90 |
 | modern | pass | pass | false | 1.000 | 0.993 | 100 | 100 |
-| modern-two-column | fail | not_applicable | true | 0.912 | 0.759 | 90 | 90 |
+| modern-two-column | fail | not_applicable | true | 0.947 | 0.734 | 90 | 90 |
 | latex | pass | pass | false | 1.000 | 0.991 | 100 | 100 |
-| clean | pass | pass | false | 0.914 | 0.997 | 100 | 90 |
-| vivid | fail | pass | true | 0.807 | 0.627 | 90 | 90 |
+| clean | pass | pass | false | 1.000 | 0.996 | 100 | 100 |
+| vivid | fail | pass | true | 0.947 | 0.720 | 90 | 90 |
 
 Column detector re-validation (on these renders and on earlier macOS
 renders): no single-column render yields any gutter candidate at band widths
 from 6 to 18 pt; the two-column renders have a gutter spanning 0.90-0.92 of
 the text height (threshold 0.40) at every width, so the frozen 9 pt / 40%
-thresholds hold with a wide margin. The sidebar is reported under `multi_column` (swiss/modern
-two-column: 0.33 of page width, suppressed) or not narrow enough to count
-separately (vivid: 0.35).
+thresholds hold with a wide margin. The sidebar is reported under
+`multi_column` (swiss/modern two-column: 0.33 of page width, suppressed) or
+not narrow enough to count separately (vivid: 0.35).
+
+Extraction agreement with poppler's `pdftotext` (whitespace tokens after NFKC
+and case folding, multiset F1): 0.998 on the eight Linux renders, 0.991 on
+earlier macOS renders (the difference is the U+F765 glyphs below), 1.000 on
+the synthetic upload fixtures. The remaining Linux differences are vivid
+headings that pdftotext itself splits (`E XPERIENCE`).
 
 Findings on these renders (reported, not suppressed):
 
-- clean's letter-spaced section headings (`letter-spacing: 0.12em`) extract
-  as spaced letters (`SU M M A R Y`), so its headings are `missing` and
-  `section_headings` fails. poppler's `pdftotext` reads them as words; pypdf
-  splits them too.
-- Uppercase headings and vivid's tightly kerned header pick up word breaks at
-  kerning gaps with the DejaVu fonts: `EDUCAT ION`, `PostgreSQ L` (swiss and
-  modern two-column sidebars), and in vivid `jo rdan.rivera@example.co m`, so
-  vivid's email is `missing` from the round trip (the `contact_email` check
-  still passes on the partial address). poppler reads these as words; pypdf
-  splits some of them.
 - In the two-column templates the extractor reads rows across both columns,
   so sidebar text interleaves with wrapped main-column lines (the summary and
-  some sidebar entries are `garbled`, order fidelity 0.63-0.76), and sidebar
-  headings share rows with main-column text.
+  some sidebar entries are `garbled`, order fidelity 0.72-0.73), and sidebar
+  headings share rows with main-column text, so `section_headings` misses
+  one of them.
 - The contact icons (`showContactIcons`) are lucide-react components, i.e.
   inline SVG, which extracts no text; a unit test keeps every template on
   them, so they cannot trip `icon_font_glyphs`.
@@ -304,10 +316,10 @@ Findings on these renders (reported, not suppressed):
 macOS renders (system fonts) differ: clean and vivid set job titles in
 `font-variant: small-caps`, and with the macOS system font Chromium emits the
 small-cap "e" as U+F765 (Private Use Area), so `icon_font_glyphs` fails and
-those titles are `missing` (clean recall 0.81, vivid 0.83); the DejaVu fonts
+those titles are `missing` (clean recall 0.90, vivid 0.83); the DejaVu fonts
 have no small caps, so Chromium synthesizes them from capitals and the Linux
-image is unaffected. The kerning word breaks above do not occur on macOS.
-Tests that depend on the renderer's fonts key on the manifest's `platform`.
+image is unaffected. Tests that depend on the renderer's fonts key on the
+manifest's `platform`.
 
 Synthetic italic: the image ships no italic faces (DejaVu Sans, Serif and
 Mono in Book and Bold, Noto CJK), so Chromium slants italic text with a
