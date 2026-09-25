@@ -67,6 +67,66 @@ async def _find_application_id(runtime: MCPRuntime, job_id: str, resume_id: str)
     return None
 
 
+async def request_preview(
+    runtime: MCPRuntime, resume_id: str, job_id: str, prompt_id: str | None
+) -> tuple[CachedPreview, dict[str, Any]]:
+    """Generate a preview, cache it for confirmation and return both.
+
+    Raises:
+        ToolError: If the route fails or does not register the preview.
+    """
+    body: dict[str, Any] = {"resume_id": resume_id, "job_id": job_id}
+    if prompt_id is not None:
+        body["prompt_id"] = prompt_id
+    data = (await runtime.bridge.post_json("/resumes/improve/preview", body))["data"]
+    if not data.get("preview_id"):
+        raise ToolError("The preview could not be registered. Please try again.")
+    preview = CachedPreview(
+        preview_id=data["preview_id"],
+        resume_id=resume_id,
+        job_id=data.get("job_id") or job_id,
+        improved_data=data["resume_preview"],
+        improvements=data.get("improvements") or [],
+        expires_at=preview_expiry(
+            data.get("preview_expires_at"),
+            settings.preview_ttl_seconds,
+            runtime.previews.now(),
+        ),
+    )
+    runtime.previews.put(preview)
+    return preview, data
+
+
+async def confirm_preview(runtime: MCPRuntime, preview: CachedPreview) -> dict[str, Any]:
+    """Save a cached preview and locate the tracker card the route created.
+
+    The preview stays cached until it expires: a retry replays the router's
+    stored confirmation instead of creating anything new.
+    """
+    body = await runtime.bridge.post_json(
+        "/resumes/improve/confirm",
+        {
+            "resume_id": preview.resume_id,
+            "job_id": preview.job_id,
+            "preview_id": preview.preview_id,
+            "improved_data": preview.improved_data,
+            "improvements": preview.improvements,
+        },
+    )
+    data = body["data"]
+    tailored_resume_id = data["resume_id"]
+    application_id = await _find_application_id(runtime, preview.job_id, tailored_resume_id)
+    return {
+        "tailored_resume_id": tailored_resume_id,
+        "source_resume_id": preview.resume_id,
+        "job_id": preview.job_id,
+        "application_id": application_id,
+        "has_cover_letter": bool(data.get("cover_letter")),
+        "has_outreach_message": bool(data.get("outreach_message")),
+        "warnings": data.get("warnings") or [],
+    }
+
+
 def register(server: MCPServer, runtime: MCPRuntime) -> None:
     """Register tailoring tools."""
 
@@ -88,26 +148,7 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         """
 
         async def operation() -> dict[str, Any]:
-            body: dict[str, Any] = {"resume_id": resume_id, "job_id": job_id}
-            if prompt_id is not None:
-                body["prompt_id"] = prompt_id
-            data = (await runtime.bridge.post_json("/resumes/improve/preview", body))["data"]
-            if not data.get("preview_id"):
-                raise ToolError("The preview could not be registered. Please try again.")
-            runtime.previews.put(
-                CachedPreview(
-                    preview_id=data["preview_id"],
-                    resume_id=resume_id,
-                    job_id=data.get("job_id") or job_id,
-                    improved_data=data["resume_preview"],
-                    improvements=data.get("improvements") or [],
-                    expires_at=preview_expiry(
-                        data.get("preview_expires_at"),
-                        settings.preview_ttl_seconds,
-                        runtime.previews.now(),
-                    ),
-                )
-            )
+            _, data = await request_preview(runtime, resume_id, job_id, prompt_id)
             return _preview_summary(data)
 
         return await runtime.run_long_operation(
@@ -133,32 +174,7 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
             raise ToolError(PREVIEW_MISS_MESSAGE)
 
         async def operation() -> dict[str, Any]:
-            # The preview stays cached until it expires: a retry replays the
-            # router's stored confirmation instead of creating anything new.
-            body = await runtime.bridge.post_json(
-                "/resumes/improve/confirm",
-                {
-                    "resume_id": preview.resume_id,
-                    "job_id": preview.job_id,
-                    "preview_id": preview.preview_id,
-                    "improved_data": preview.improved_data,
-                    "improvements": preview.improvements,
-                },
-            )
-            data = body["data"]
-            tailored_resume_id = data["resume_id"]
-            application_id = await _find_application_id(
-                runtime, preview.job_id, tailored_resume_id
-            )
-            return {
-                "tailored_resume_id": tailored_resume_id,
-                "source_resume_id": preview.resume_id,
-                "job_id": preview.job_id,
-                "application_id": application_id,
-                "has_cover_letter": bool(data.get("cover_letter")),
-                "has_outreach_message": bool(data.get("outreach_message")),
-                "warnings": data.get("warnings") or [],
-            }
+            return await confirm_preview(runtime, preview)
 
         return await runtime.run_long_operation(
             "tailor_resume_confirm",

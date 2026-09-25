@@ -447,6 +447,677 @@
   },
   {
     "inputSchema": {
+      "properties": {
+        "content_base64": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Base64-encoded file content (max 4 MB decoded).",
+          "title": "Content Base64"
+        },
+        "content_language": {
+          "anyOf": [
+            {
+              "enum": [
+                "en",
+                "es",
+                "fr",
+                "pt",
+                "de",
+                "ja",
+                "ko",
+                "zh"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Language the resume is written in; detected (file) or the configured content language (stored resume) when omitted.",
+          "title": "Content Language"
+        },
+        "detail": {
+          "default": false,
+          "description": "Also return the full parse-check report(s); default is a compact summary.",
+          "title": "Detail",
+          "type": "boolean"
+        },
+        "filename": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "File name with .pdf, .doc or .docx extension (required with content_base64).",
+          "title": "Filename"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Local file path to check. Only available on the stdio transport.",
+          "title": "Path"
+        },
+        "wait_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds to wait for completion before returning a task_id to poll with get_task. Defaults: 200 (stdio), 45 (HTTP).",
+          "title": "Wait Seconds"
+        }
+      },
+      "title": "ats_parse_check_fileArguments",
+      "type": "object"
+    },
+    "name": "ats_parse_check_file"
+  },
+  {
+    "inputSchema": {
+      "$defs": {
+        "FontSizeSettings": {
+          "additionalProperties": false,
+          "description": "Font scale levels (1-5) and families.",
+          "properties": {
+            "base": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Base",
+              "type": "integer"
+            },
+            "bodyFont": {
+              "default": "sans-serif",
+              "enum": [
+                "serif",
+                "sans-serif",
+                "mono"
+              ],
+              "title": "Bodyfont",
+              "type": "string"
+            },
+            "headerFont": {
+              "default": "serif",
+              "enum": [
+                "serif",
+                "sans-serif",
+                "mono"
+              ],
+              "title": "Headerfont",
+              "type": "string"
+            },
+            "headerScale": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Headerscale",
+              "type": "integer"
+            }
+          },
+          "title": "FontSizeSettings",
+          "type": "object"
+        },
+        "MarginSettings": {
+          "additionalProperties": false,
+          "description": "Page margins in millimetres (applied by the PDF renderer).",
+          "properties": {
+            "bottom": {
+              "default": 10,
+              "maximum": 25,
+              "minimum": 5,
+              "title": "Bottom",
+              "type": "integer"
+            },
+            "left": {
+              "default": 10,
+              "maximum": 25,
+              "minimum": 5,
+              "title": "Left",
+              "type": "integer"
+            },
+            "right": {
+              "default": 10,
+              "maximum": 25,
+              "minimum": 5,
+              "title": "Right",
+              "type": "integer"
+            },
+            "top": {
+              "default": 10,
+              "maximum": 25,
+              "minimum": 5,
+              "title": "Top",
+              "type": "integer"
+            }
+          },
+          "title": "MarginSettings",
+          "type": "object"
+        },
+        "SpacingSettings": {
+          "additionalProperties": false,
+          "description": "Spacing levels (1-5).",
+          "properties": {
+            "item": {
+              "default": 2,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Item",
+              "type": "integer"
+            },
+            "lineHeight": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Lineheight",
+              "type": "integer"
+            },
+            "section": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Section",
+              "type": "integer"
+            }
+          },
+          "title": "SpacingSettings",
+          "type": "object"
+        },
+        "TemplateSettings": {
+          "additionalProperties": false,
+          "description": "Frontend ``TemplateSettings`` plus the print locale.\n\nDefaults equal ``DEFAULT_TEMPLATE_SETTINGS`` in\n``apps/frontend/lib/types/template-settings.ts``; together these are the\n17 query parameters of ``GET /api/v1/resumes/{id}/pdf``.",
+          "properties": {
+            "accentColor": {
+              "default": "blue",
+              "enum": [
+                "blue",
+                "green",
+                "orange",
+                "red"
+              ],
+              "title": "Accentcolor",
+              "type": "string"
+            },
+            "compactMode": {
+              "default": false,
+              "title": "Compactmode",
+              "type": "boolean"
+            },
+            "fontSize": {
+              "$ref": "#/$defs/FontSizeSettings"
+            },
+            "lang": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "en",
+                    "es",
+                    "zh",
+                    "ja",
+                    "pt",
+                    "fr",
+                    "ko"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Lang"
+            },
+            "margins": {
+              "$ref": "#/$defs/MarginSettings"
+            },
+            "pageSize": {
+              "default": "A4",
+              "enum": [
+                "A4",
+                "LETTER"
+              ],
+              "title": "Pagesize",
+              "type": "string"
+            },
+            "showContactIcons": {
+              "default": false,
+              "title": "Showcontacticons",
+              "type": "boolean"
+            },
+            "spacing": {
+              "$ref": "#/$defs/SpacingSettings"
+            },
+            "template": {
+              "default": "swiss-single",
+              "enum": [
+                "swiss-single",
+                "swiss-two-column",
+                "modern",
+                "modern-two-column",
+                "latex",
+                "clean",
+                "vivid"
+              ],
+              "title": "Template",
+              "type": "string"
+            }
+          },
+          "title": "TemplateSettings",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "all_templates": {
+          "default": false,
+          "description": "Check all seven templates instead of settings.template.",
+          "title": "All Templates",
+          "type": "boolean"
+        },
+        "content_language": {
+          "anyOf": [
+            {
+              "enum": [
+                "en",
+                "es",
+                "fr",
+                "pt",
+                "de",
+                "ja",
+                "ko",
+                "zh"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Language the resume is written in; detected (file) or the configured content language (stored resume) when omitted.",
+          "title": "Content Language"
+        },
+        "detail": {
+          "default": false,
+          "description": "Also return the full parse-check report(s); default is a compact summary.",
+          "title": "Detail",
+          "type": "boolean"
+        },
+        "render_locale": {
+          "anyOf": [
+            {
+              "enum": [
+                "en",
+                "es",
+                "zh",
+                "ja",
+                "pt",
+                "fr",
+                "ko"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Print locale for section headings (sets settings.lang).",
+          "title": "Render Locale"
+        },
+        "resume_id": {
+          "description": "Resume id.",
+          "title": "Resume Id",
+          "type": "string"
+        },
+        "settings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TemplateSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Template settings as in the web UI (template, pageSize, margins, spacing, fontSize, ...); defaults to swiss-single."
+        },
+        "wait_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds to wait for completion before returning a task_id to poll with get_task. Defaults: 200 (stdio), 45 (HTTP).",
+          "title": "Wait Seconds"
+        }
+      },
+      "required": [
+        "resume_id"
+      ],
+      "title": "ats_parse_check_resumeArguments",
+      "type": "object"
+    },
+    "name": "ats_parse_check_resume"
+  },
+  {
+    "inputSchema": {
+      "$defs": {
+        "FontSizeSettings": {
+          "additionalProperties": false,
+          "description": "Font scale levels (1-5) and families.",
+          "properties": {
+            "base": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Base",
+              "type": "integer"
+            },
+            "bodyFont": {
+              "default": "sans-serif",
+              "enum": [
+                "serif",
+                "sans-serif",
+                "mono"
+              ],
+              "title": "Bodyfont",
+              "type": "string"
+            },
+            "headerFont": {
+              "default": "serif",
+              "enum": [
+                "serif",
+                "sans-serif",
+                "mono"
+              ],
+              "title": "Headerfont",
+              "type": "string"
+            },
+            "headerScale": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Headerscale",
+              "type": "integer"
+            }
+          },
+          "title": "FontSizeSettings",
+          "type": "object"
+        },
+        "MarginSettings": {
+          "additionalProperties": false,
+          "description": "Page margins in millimetres (applied by the PDF renderer).",
+          "properties": {
+            "bottom": {
+              "default": 10,
+              "maximum": 25,
+              "minimum": 5,
+              "title": "Bottom",
+              "type": "integer"
+            },
+            "left": {
+              "default": 10,
+              "maximum": 25,
+              "minimum": 5,
+              "title": "Left",
+              "type": "integer"
+            },
+            "right": {
+              "default": 10,
+              "maximum": 25,
+              "minimum": 5,
+              "title": "Right",
+              "type": "integer"
+            },
+            "top": {
+              "default": 10,
+              "maximum": 25,
+              "minimum": 5,
+              "title": "Top",
+              "type": "integer"
+            }
+          },
+          "title": "MarginSettings",
+          "type": "object"
+        },
+        "SpacingSettings": {
+          "additionalProperties": false,
+          "description": "Spacing levels (1-5).",
+          "properties": {
+            "item": {
+              "default": 2,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Item",
+              "type": "integer"
+            },
+            "lineHeight": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Lineheight",
+              "type": "integer"
+            },
+            "section": {
+              "default": 3,
+              "maximum": 5,
+              "minimum": 1,
+              "title": "Section",
+              "type": "integer"
+            }
+          },
+          "title": "SpacingSettings",
+          "type": "object"
+        },
+        "TemplateSettings": {
+          "additionalProperties": false,
+          "description": "Frontend ``TemplateSettings`` plus the print locale.\n\nDefaults equal ``DEFAULT_TEMPLATE_SETTINGS`` in\n``apps/frontend/lib/types/template-settings.ts``; together these are the\n17 query parameters of ``GET /api/v1/resumes/{id}/pdf``.",
+          "properties": {
+            "accentColor": {
+              "default": "blue",
+              "enum": [
+                "blue",
+                "green",
+                "orange",
+                "red"
+              ],
+              "title": "Accentcolor",
+              "type": "string"
+            },
+            "compactMode": {
+              "default": false,
+              "title": "Compactmode",
+              "type": "boolean"
+            },
+            "fontSize": {
+              "$ref": "#/$defs/FontSizeSettings"
+            },
+            "lang": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "en",
+                    "es",
+                    "zh",
+                    "ja",
+                    "pt",
+                    "fr",
+                    "ko"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Lang"
+            },
+            "margins": {
+              "$ref": "#/$defs/MarginSettings"
+            },
+            "pageSize": {
+              "default": "A4",
+              "enum": [
+                "A4",
+                "LETTER"
+              ],
+              "title": "Pagesize",
+              "type": "string"
+            },
+            "showContactIcons": {
+              "default": false,
+              "title": "Showcontacticons",
+              "type": "boolean"
+            },
+            "spacing": {
+              "$ref": "#/$defs/SpacingSettings"
+            },
+            "template": {
+              "default": "swiss-single",
+              "enum": [
+                "swiss-single",
+                "swiss-two-column",
+                "modern",
+                "modern-two-column",
+                "latex",
+                "clean",
+                "vivid"
+              ],
+              "title": "Template",
+              "type": "string"
+            }
+          },
+          "title": "TemplateSettings",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "detail": {
+          "default": false,
+          "description": "Also return the full parse-check report(s); default is a compact summary.",
+          "title": "Detail",
+          "type": "boolean"
+        },
+        "job_id": {
+          "description": "Job id from add_jobs.",
+          "title": "Job Id",
+          "type": "string"
+        },
+        "min_content_recall": {
+          "default": 0.95,
+          "description": "Minimum share of resume content an ATS must recover to pass.",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Min Content Recall",
+          "type": "number"
+        },
+        "prompt_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional tailoring prompt id; defaults to the configured prompt.",
+          "title": "Prompt Id"
+        },
+        "resume_id": {
+          "description": "Source (usually master) resume id.",
+          "title": "Resume Id",
+          "type": "string"
+        },
+        "settings": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TemplateSettings"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Template settings as in the web UI (template, pageSize, margins, spacing, fontSize, ...); defaults to swiss-single."
+        },
+        "template": {
+          "anyOf": [
+            {
+              "enum": [
+                "swiss-single",
+                "swiss-two-column",
+                "modern",
+                "modern-two-column",
+                "latex",
+                "clean",
+                "vivid"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Template to verify with (shortcut for settings.template).",
+          "title": "Template"
+        },
+        "wait_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds to wait for completion before returning a task_id to poll with get_task. Defaults: 200 (stdio), 45 (HTTP).",
+          "title": "Wait Seconds"
+        }
+      },
+      "required": [
+        "resume_id",
+        "job_id"
+      ],
+      "title": "tailor_and_verifyArguments",
+      "type": "object"
+    },
+    "name": "tailor_and_verify"
+  },
+  {
+    "inputSchema": {
       "$defs": {
         "ApplicationStatus": {
           "description": "The seven stable tracker columns (decoupled from i18n labels).",
