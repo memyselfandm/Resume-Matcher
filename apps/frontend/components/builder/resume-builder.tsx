@@ -54,6 +54,7 @@ import {
   TEMPLATE_SETTINGS_STORAGE_KEY,
   readStoredTemplateSettings,
 } from '@/lib/utils/stored-template-settings';
+import { ParseCheckPanel } from '@/components/ats-parse-check/parse-check-panel';
 import { withLocalizedDefaultSections } from '@/lib/utils/section-helpers';
 import { useLanguage } from '@/lib/context/language-context';
 import { buildResumeFilename, downloadBlobAsFile, openUrlInNewTab } from '@/lib/utils/download';
@@ -1554,6 +1555,16 @@ const ResumeBuilderContent = () => {
                     <FormattingControls
                       settings={templateSettings}
                       onChange={handleSettingsChange}
+                    />
+                    <ParseCheckPanel
+                      resumeId={resumeId}
+                      settings={templateSettings}
+                      lang={uiLanguage}
+                      note={
+                        hasUnsavedChanges
+                          ? t('atsParseCheck.unsavedChangesNote')
+                          : t('atsParseCheck.savedVersionNote')
+                      }
                     />
                     <ResumeForm resumeData={resumeData} onUpdate={handleUpdate} />
                   </>
