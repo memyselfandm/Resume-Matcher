@@ -13,8 +13,9 @@ import copy
 import json
 from collections.abc import Callable
 from pathlib import Path
+from string import Formatter
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -25,7 +26,13 @@ from app.mcp.bridge import MAX_UPLOAD_BYTES
 from app.mcp.tools import ats
 from app.schemas.models import ResumeData
 from app.services.ats_parse import own_output
-from app.services.ats_parse.own_output import OwnOutputParseCheck, TemplateSettings
+from app.services.ats_parse.messages_en import FAIL_MESSAGES
+from app.services.ats_parse.own_output import (
+    OwnOutputParseCheck,
+    TemplateParseCheck,
+    TemplateSettings,
+)
+from app.services.ats_parse.report import CheckResult, ParseCheckReport, RoundtripResult
 from app.services.ats_parse.templates import TEMPLATE_IDS
 from tests.ats_parse_renders import render_pdf, source as render_source
 from tests.integration.test_mcp_server import (
@@ -197,8 +204,7 @@ class TestParseCheckResume:
         assert body["render_locale"] == "en"
         [summary] = body["results"]
         assert summary["template"] == "swiss-single"
-        assert "status" not in summary and "failing_checks" not in summary
-        assert body["messages"] == {}
+        assert "status" not in summary and summary["failing_checks"] == []
         assert summary["passes"] is True
         assert summary["content_recall"] >= 0.95
         assert summary["order_fidelity"] >= 0.95
@@ -245,19 +251,15 @@ class TestParseCheckResume:
         assert [result["template"] for result in results] == list(TEMPLATE_IDS)
         for result in results:
             assert "status" not in result and "error" not in result
-            failing = {check["id"]: check for check in result.get("failing_checks", [])}
+            # Comparison rows: "id (severity)" only; explanations via detail=true.
+            failing = result.get("top_failing_checks", [])
+            assert "failing_checks" not in result and "content_score" not in result
             if result["template"] in TWO_COLUMN_TEMPLATES:
                 assert result["two_column_by_design"] is True
-                assert failing["multi_column"]["expected_by_template"] is True
-                assert failing["multi_column"]["severity"] == "medium"
-                # Explained once for all three templates, not per template.
-                assert "message" not in failing["multi_column"]
+                assert "multi_column (medium)" in failing
             else:
                 assert "two_column_by_design" not in result
-                assert "multi_column" not in failing
-        assert body["messages"]["multi_column"].endswith(
-            "Expected for the selected two-column template."
-        )
+                assert not any(item.startswith("multi_column") for item in failing)
         assert output_size(body) < SUMMARY_LIMIT_BYTES
 
     async def test_busy_check_maps_429_to_retry_hint(
@@ -712,3 +714,141 @@ class TestTailorAndVerifyErrors:
         [card] = await tailored_cards(isolated_db, tailored["resume_id"])
         assert f"tailored_resume_id={tailored['resume_id']}" in text
         assert f"application_id={card['application_id']}" in text
+
+
+def worst_case_report(roundtrip: bool) -> ParseCheckReport:
+    """Every known check failing at high severity with long list params.
+
+    Plus a check the English catalog does not know, so the raw-params
+    fallback is exercised too.
+    """
+    long_list = [f"{'section-name-' * 5}{index}" for index in range(25)]
+    checks = [
+        CheckResult(
+            id="future_check_with_a_long_identifier",
+            category="layout",
+            severity="fatal",
+            status="fail",
+            params={f"param_{index}": long_list for index in range(3)},
+        )
+    ]
+    for check_id, template in FAIL_MESSAGES.items():
+        fields = {name for _, name, _, _ in Formatter().parse(template) if name}
+        checks.append(
+            CheckResult(
+                id=check_id,
+                category="layout",
+                severity="high",
+                status="fail",
+                params={**{name: long_list for name in fields}, "expected_by_template": True},
+            )
+        )
+    return ParseCheckReport(
+        file_format="pdf",
+        extractability="partial",
+        content_language="en",
+        overall_score=0,
+        content_score=0,
+        checks=checks,
+        roundtrip=RoundtripResult(content_recall=0.123, order_fidelity=0.456, fields=[])
+        if roundtrip
+        else None,
+        profiles=[],
+        extracted_text_preview="x" * 1000,
+    )
+
+
+def worst_case_own_output(resume_id: str, templates: tuple[str, ...]) -> OwnOutputParseCheck:
+    return OwnOutputParseCheck(
+        resume_id=resume_id,
+        render_locale="en",
+        settings=TemplateSettings(),
+        results=[
+            TemplateParseCheck(
+                template=template,
+                status="ok",
+                expected_by_template=True,
+                render_attempts=1,
+                report=worst_case_report(roundtrip=True),
+            )
+            for template in templates
+        ],
+    )
+
+
+class TestSummaryBound:
+    """Default outputs stay under 2 KB by construction, whatever the report holds."""
+
+    async def test_file_check(self, isolated_db: Database) -> None:
+        content = (FIXTURES / "clean_single_column.pdf").read_bytes()
+        async with mcp_session() as (client, _):
+            with patch(
+                "app.routers.parse_check.run_parse_check",
+                AsyncMock(return_value=worst_case_report(roundtrip=False)),
+            ):
+                call = {"filename": "cv.pdf", "content_base64": base64.b64encode(content).decode()}
+                summary = payload(await client.call_tool("ats_parse_check_file", call))
+                detailed = payload(
+                    await client.call_tool("ats_parse_check_file", {**call, "detail": True})
+                )
+        assert output_size(summary) < SUMMARY_LIMIT_BYTES
+        assert len(summary["failing_checks"]) == ats.SUMMARY_MAX_FAILING_CHECKS
+        assert summary["more_failing_checks"] == len(FAIL_MESSAGES) + 1 - 3
+        assert summary["failing_checks"][0]["id"] == "future_check_with_a_long_iden..."
+        assert summary["failing_checks"][0]["message"].startswith("No English message")
+        # detail keeps every check and the full params.
+        assert len(detailed["report"]["checks"]) == len(FAIL_MESSAGES) + 1
+        assert len(detailed["report"]["checks"][0]["params"]["param_0"]) == 25
+
+    @pytest.mark.parametrize("all_templates", [False, True])
+    async def test_resume_check(
+        self, rendered_resume_id: str, all_templates: bool
+    ) -> None:
+        templates = TEMPLATE_IDS if all_templates else ("swiss-single",)
+        result = worst_case_own_output(rendered_resume_id, templates)
+        async with mcp_session() as (client, _):
+            with patch(
+                "app.routers.parse_check.check_own_output", AsyncMock(return_value=result)
+            ):
+                body = payload(
+                    await client.call_tool(
+                        "ats_parse_check_resume",
+                        {"resume_id": rendered_resume_id, "all_templates": all_templates},
+                    )
+                )
+        assert len(body["results"]) == len(templates)
+        assert output_size(body) < SUMMARY_LIMIT_BYTES, output_size(body)
+
+    async def test_tailor_and_verify(
+        self,
+        isolated_db: Database,
+        rendered_resume_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        original_preview = ats.request_preview
+
+        async def noisy_preview(*args: Any, **kwargs: Any) -> Any:
+            preview, data = await original_preview(*args, **kwargs)
+            return preview, {**data, "warnings": ["w" * 1000] * 20}
+
+        monkeypatch.setattr(ats, "request_preview", noisy_preview)
+
+        async def worst_check(app: Any, resume_id: str, **kwargs: Any) -> OwnOutputParseCheck:
+            return worst_case_own_output(resume_id, ("swiss-single",))
+
+        async with mcp_session() as (client, _):
+            job_id = await add_job(client)
+            call = {"resume_id": rendered_resume_id, "job_id": job_id}
+            with (
+                mocked_tailoring(identity_tailoring()),
+                patch("app.routers.parse_check.check_own_output", worst_check),
+            ):
+                summary = payload(await client.call_tool("tailor_and_verify", call))
+                detailed = payload(
+                    await client.call_tool("tailor_and_verify", {**call, "detail": True})
+                )
+        assert output_size(summary) < SUMMARY_LIMIT_BYTES, output_size(summary)
+        assert summary["passes"] is False
+        assert summary["warnings"][-1] == f"and {20 - 2} more"
+        assert len(detailed["warnings"]) == 20
+        assert len(detailed["report"]["results"][0]["report"]["checks"]) == len(FAIL_MESSAGES) + 1

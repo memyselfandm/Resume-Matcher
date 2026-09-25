@@ -9,6 +9,7 @@ from app.mcp.tools.ats import (
     DEFAULT_RETRY_AFTER_SECONDS,
     _retry_after_seconds,
     _template_settings,
+    bounded_warnings,
     failing_checks,
     own_output_summary,
     present_verification,
@@ -97,7 +98,7 @@ class TestSummaries:
             check("sidebar", "medium", status="pass"),
             check("page_count", "low", pages=3, max_pages=2),
         ]
-        assert failing_checks(report(checks)) == [
+        assert failing_checks(report(checks)) == ([
             {
                 "id": "multi_column",
                 "severity": "medium",
@@ -112,7 +113,7 @@ class TestSummaries:
                 "severity": "low",
                 "message": "The resume is 3 pages; most systems prefer 2 or fewer.",
             },
-        ]
+        ], 0)
 
     def test_report_summary_fields(self) -> None:
         summary = report_summary(report([check("tables", "high")], recall=0.99), 0.95)
@@ -151,7 +152,7 @@ class TestSummaries:
                 ),
             ],
         )
-        vivid, clean = own_output_summary(check_result)["results"]
+        vivid, clean = own_output_summary(check_result, compact=True)
         assert vivid == {
             "template": "vivid",
             "status": "render_failed",
@@ -164,47 +165,87 @@ class TestSummaries:
 
     def test_unknown_check_falls_back_to_id_and_params(self) -> None:
         checks = [check("future_check", "high", foo=1), check("page_count", "low", pages=3)]
-        assert failing_checks(report(checks)) == [
-            {"id": "future_check", "severity": "high", "params": {"foo": 1}},
+        assert failing_checks(report(checks)) == ([
+            {
+                "id": "future_check",
+                "severity": "high",
+                "message": 'No English message for this check; params: {"foo": 1}',
+            },
             # page_count's message needs max_pages, which is missing here.
-            {"id": "page_count", "severity": "low", "params": {"pages": 3}},
+            {
+                "id": "page_count",
+                "severity": "low",
+                "message": 'No English message for this check; params: {"pages": 3}',
+            },
+        ], 0)
+
+    def test_most_severe_checks_first_then_a_count(self) -> None:
+        checks = [
+            check("images", "low"),
+            check("tables", "high"),
+            check("page_count", "low", pages=3, max_pages=2),
+            check("text_layer", "fatal"),
+            check("multi_column", "medium"),
         ]
+        items, more = failing_checks(report(checks))
+        assert [item["id"] for item in items] == ["text_layer", "tables", "multi_column"]
+        assert more == 2
+        summary = report_summary(report(checks), 0.95)
+        assert summary["more_failing_checks"] == 2
+        assert "more_failing_checks" not in report_summary(report(checks[:3]), 0.95)
 
-    def test_shared_messages_are_listed_once(self) -> None:
-        def template(name: str, pages: int) -> TemplateParseCheck:
-            checks = [
-                check("multi_column", "medium", expected_by_template=True),
-                check("page_count", "low", pages=pages, max_pages=2),
-            ]
-            return TemplateParseCheck(
-                template=name,
-                status="ok",
-                expected_by_template=True,
-                render_attempts=1,
-                report=report(checks, recall=1.0),
-            )
+    def test_list_params_and_messages_are_bounded(self) -> None:
+        missing = [f"heading-{index}" for index in range(12)]
+        [item], _ = failing_checks(report([check("section_headings", "medium", missing=missing)]))
+        assert item["message"] == (
+            "Standard section headings not found: heading-0, heading-1, heading-2, "
+            "heading-3, heading-4, and 7 more."
+        )
+        long_item = ["x" * 500] * 8
+        [clipped], _ = failing_checks(report([check("section_headings", "medium", missing=long_item)]))
+        assert len(clipped["message"]) <= 200 and clipped["message"].endswith("...")
+        [raw], _ = failing_checks(report([check("future_check", "high", ids=list(range(9)))]))
+        assert raw["message"].endswith('params: {"ids": [0, 1, 2, 3, 4, "and 4 more"]}')
+        many_keys = {f"param_{index}": ["y" * 60] * 9 for index in range(10)}
+        [flood], _ = failing_checks(report([check("x" * 80, "high", **many_keys)]))
+        assert len(flood["message"]) <= 200 and len(flood["id"]) <= 32
 
-        summary = own_output_summary(
+    def test_blocking_reason_names_at_most_three_ids(self) -> None:
+        checks = [check(f"check_{index}", "high") for index in range(6)]
+        _, reasons = verdict(report(checks), 0.95)
+        assert reasons == ["fatal/high checks failed: check_0, check_1, check_2, and 3 more"]
+
+    def test_compact_rows_list_top_ids_without_messages(self) -> None:
+        checks = [
+            check("multi_column", "medium", expected_by_template=True),
+            check("tables", "high"),
+            check("images", "low"),
+        ]
+        [row] = own_output_summary(
             OwnOutputParseCheck(
                 resume_id="r1",
                 render_locale="en",
                 settings=TemplateSettings(),
-                results=[template("swiss-two-column", 3), template("vivid", 4)],
-            )
+                results=[
+                    TemplateParseCheck(
+                        template="vivid",
+                        status="ok",
+                        expected_by_template=True,
+                        render_attempts=1,
+                        report=report(checks, recall=1.0),
+                    )
+                ],
+            ),
+            compact=True,
         )
-        assert list(summary["messages"]) == ["multi_column"]
-        assert summary["messages"]["multi_column"].endswith(
-            "Expected for the selected two-column template."
-        )
-        first, second = summary["results"]
-        assert first["failing_checks"][0] == {
-            "id": "multi_column",
-            "severity": "medium",
-            "expected_by_template": True,
-        }
-        # Different wording per template stays inline.
-        assert first["failing_checks"][1]["message"].startswith("The resume is 3 pages")
-        assert second["failing_checks"][1]["message"].startswith("The resume is 4 pages")
+        assert row["top_failing_checks"] == ["tables (high)", "multi_column (medium)"]
+        assert row["more_failing_checks"] == 1
+        assert row["two_column_by_design"] is True and row["passes"] is False
+        assert "reasons" not in row and "content_score" not in row
+
+    def test_warnings_are_capped_and_clipped(self) -> None:
+        warnings = ["w" * 400, "short", "third", "fourth"]
+        assert bounded_warnings(warnings) == ["w" * 157 + "...", "short", "and 2 more"]
 
 
 class TestPresentVerification:
