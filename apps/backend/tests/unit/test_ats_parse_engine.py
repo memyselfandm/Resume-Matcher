@@ -143,6 +143,33 @@ class TestGlyphChecks:
         assert _check(report, "icon_font_glyphs").status == "pass"
 
 
+class TestRotatedText:
+    """A 45-degree watermark drawn in a form XObject across a single-column page."""
+
+    def test_watermark_is_read_but_kept_out_of_rows_and_layout(self) -> None:
+        document = extract_document(
+            (FIXTURES / "rotated_watermark.pdf").read_bytes(), "rotated_watermark.pdf"
+        )
+        rows = document.text.splitlines()
+        # Extractors read it (all_texts), as its own row after the page's rows.
+        assert rows[-1] == "CONFIDENTIAL DRAFT"
+        assert sum("CONFIDENTIAL" in row for row in rows) == 1
+        assert "Senior Software Engineer, Northwind Analytics, Jan 2021 - Present" in rows
+        assert all("CONFIDENTIAL" not in line.text for line in document.pages[0].lines)
+
+    def test_watermark_does_not_trip_layout_or_contact_checks(self) -> None:
+        report = _report("rotated_watermark.pdf", content_language="en")
+        for check_id in (
+            "multi_column",
+            "sidebar",
+            "contact_email",
+            "contact_phone",
+            "contact_linkedin",
+            "section_headings",
+        ):
+            assert _check(report, check_id).status == "pass", check_id
+
+
 class TestDocxChecks:
     def test_table_layout_docx_fails_tables(self) -> None:
         report = _report("table_layout.docx")

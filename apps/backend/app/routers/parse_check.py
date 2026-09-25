@@ -20,9 +20,11 @@ from app.routers.resumes import (
     UPLOAD_READ_CHUNK_SIZE,
 )
 from app.config_cache import get_content_language
-from app.mcp.bridge import InvalidIdentifierError
+from app.internal_client import InvalidIdentifierError
 from app.services.ats_parse import ParseCheckReport, run_parse_check
 from app.services.ats_parse.own_output import (
+    BUSY_RETRY_AFTER_SECONDS,
+    OwnOutputBusyError,
     OwnOutputParseCheck,
     RenderUnavailableError,
     ResumeNotFoundError,
@@ -128,6 +130,7 @@ _RENDER_FAILURES: dict[str, tuple[int, str]] = {
     "render_busy": (503, "PDF renderer is busy. Please try again shortly."),
     "render_timeout": (504, "PDF rendering timed out. Please try again."),
     "render_error": (503, "PDF rendering failed. Please try again."),
+    "analysis_error": (500, "Parse check failed. Please try again."),
     "budget_exhausted": (504, "Parse check timed out. Please try again."),
 }
 
@@ -146,7 +149,8 @@ async def parse_check_resume(
     stored. ``content_language`` defaults to the configured content language;
     ``settings.lang`` is the print locale that localizes section headings.
     With ``all_templates``, a template that cannot be rendered is reported as
-    ``render_failed`` (or ``timed_out``) and the response is still 200.
+    ``render_failed`` (or ``timed_out``) and the response is still 200. Only
+    one such check runs at a time; another request gets 429 with Retry-After.
     """
     options = body or OwnOutputParseCheckRequest()
     content_language = options.content_language or get_content_language()
@@ -158,6 +162,12 @@ async def parse_check_resume(
             content_language=content_language,
             all_templates=options.all_templates,
         )
+    except OwnOutputBusyError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Another parse check of rendered output is running. Please try again shortly.",
+            headers={"Retry-After": str(BUSY_RETRY_AFTER_SECONDS)},
+        ) from exc
     except (InvalidIdentifierError, ResumeNotFoundError) as exc:
         raise HTTPException(status_code=404, detail="Resume not found") from exc
     except ResumeNotProcessedError as exc:

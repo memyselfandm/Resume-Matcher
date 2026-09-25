@@ -42,8 +42,10 @@ TEMPLATE_IDS: tuple[TemplateId, ...] = (
     "vivid",
 )
 
-# Locales the print page understands (``apps/frontend/i18n/config.ts``).
-RenderLocale = Literal["en", "es", "fr", "ja", "ko", "pt-BR", "zh"]
+# ``locales`` of ``apps/frontend/i18n/config.ts``: the print page resolves any
+# other ``lang`` to English. Portuguese is ``pt`` (its strings live in
+# ``messages/pt-BR.json``, mapped by ``lib/i18n/messages.ts``).
+RenderLocale = Literal["en", "es", "zh", "ja", "pt", "fr", "ko"]
 DEFAULT_RENDER_LOCALE = "en"
 
 PERSONAL_KINDS = (
@@ -151,9 +153,10 @@ TEMPLATE_LAYOUTS: dict[str, TemplateLayout] = {
     "vivid": TemplateLayout(_TWO_COLUMN_FIELDS, _HEADER_LINKS_FIRST, _VIVID_BODY, True),
 }
 
-# ``resume.sections.*`` of each locale file in ``apps/frontend/messages``: the
-# print page swaps a default section's English display name for these.
-# ``tests/unit/test_ats_parse_templates.py`` asserts parity with the locale files.
+# ``resume.sections.*`` of each locale's message file (``lib/i18n/messages.ts``
+# maps locale -> file): the print page swaps a default section's English
+# display name for these. ``tests/unit/test_ats_parse_own_renders.py`` asserts
+# parity with the frontend locale list and message files.
 _DEFAULT_ENGLISH_NAMES = {
     "summary": "Summary",
     "workExperience": "Experience",
@@ -191,7 +194,7 @@ LOCALIZED_DEFAULT_HEADINGS: dict[str, dict[str, str]] = {
         "personalProjects": "프로젝트",
         "additional": "기술 및 수상 내역",
     },
-    "pt-BR": {
+    "pt": {
         "summary": "Resumo",
         "workExperience": "Experiência",
         "education": "Formação",

@@ -16,6 +16,7 @@ import anyio
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app import pdf
 from app.main import app
 from app.pdf import (
     RENDER_BUSY_MESSAGE,
@@ -23,6 +24,8 @@ from app.pdf import (
     PDFRenderTimeoutError,
 )
 from app.services.ats_parse import own_output
+from app.services.ats_parse.engine import PARSE_CHECK_TIMEOUT_SECONDS
+from app.services.ats_parse.roundtrip import MAX_ROUNDTRIP_FIELDS
 from app.services.ats_parse.templates import TEMPLATE_IDS
 
 RENDERS = Path(__file__).resolve().parents[1] / "fixtures" / "ats_parse" / "renders"
@@ -303,3 +306,239 @@ async def test_same_request_returns_byte_identical_body(
             second = await client.post(f"/api/v1/resumes/{resume_id}/parse-check", json={})
     assert first.status_code == second.status_code == 200
     assert first.content == second.content
+
+
+async def test_analysis_error_of_one_template_does_not_stop_the_sweep(
+    client: AsyncClient, resume_id: str
+) -> None:
+    fixture_render = _fixture_render([])
+
+    async def unreadable_modern(url: str, *args: Any, **kwargs: Any) -> bytes:
+        if _query(url)["template"] == "modern":
+            return b"%PDF-1.7 not really a pdf"
+        return await fixture_render(url, *args, **kwargs)
+
+    with patch("app.routers.resumes.render_resume_pdf", unreadable_modern):
+        async with client:
+            response = await client.post(
+                f"/api/v1/resumes/{resume_id}/parse-check", json={"all_templates": True}
+            )
+            single = await client.post(
+                f"/api/v1/resumes/{resume_id}/parse-check",
+                json={"settings": {"template": "modern"}},
+            )
+    assert response.status_code == 200
+    results = {result["template"]: result for result in response.json()["results"]}
+    assert results["modern"] == {
+        "template": "modern",
+        "status": "render_failed",
+        "expected_by_template": False,
+        "render_attempts": 1,
+        "error": "analysis_error",
+        "report": None,
+    }
+    assert all(
+        result["status"] == "ok" for template, result in results.items() if template != "modern"
+    )
+    assert single.status_code == 500
+    assert "Traceback" not in single.text
+
+
+async def test_portuguese_render_locale_is_accepted(client: AsyncClient, resume_id: str) -> None:
+    calls: list[str] = []
+    with patch("app.routers.resumes.render_resume_pdf", _fixture_render(calls)):
+        async with client:
+            response = await client.post(
+                f"/api/v1/resumes/{resume_id}/parse-check", json={"settings": {"lang": "pt"}}
+            )
+            regional = await client.post(
+                f"/api/v1/resumes/{resume_id}/parse-check", json={"settings": {"lang": "pt-BR"}}
+            )
+    assert response.status_code == 200
+    assert response.json()["render_locale"] == "pt"
+    assert _query(calls[0])["lang"] == "pt"
+    checks = {check["id"]: check for check in response.json()["results"][0]["report"]["checks"]}
+    assert checks["section_headings"]["params"]["render_locale"] == "pt"
+    # The frontend only knows "pt"; "pt-BR" would silently render in English.
+    assert regional.status_code == 422
+
+
+async def test_huge_resume_round_trip_is_capped_within_the_budget(
+    client: AsyncClient, isolated_db: Any
+) -> None:
+    source = json.loads((RENDERS / "source.json").read_text())
+    source["workExperience"][0]["description"] = [
+        f"Delivered project {index} for client team {index * 7}" for index in range(3_000)
+    ]
+    resume = await isolated_db.create_resume(
+        content=json.dumps(source),
+        content_type="json",
+        processed_data=source,
+        processing_status="ready",
+    )
+    with patch("app.routers.resumes.render_resume_pdf", _fixture_render([])):
+        async with client:
+            response = await client.post(
+                f"/api/v1/resumes/{resume['resume_id']}/parse-check", json={}
+            )
+    assert response.status_code == 200
+    [result] = response.json()["results"]
+    assert result["status"] == "ok"
+    roundtrip = result["report"]["roundtrip"]
+    assert roundtrip["truncated"] is True
+    assert len(roundtrip["fields"]) == MAX_ROUNDTRIP_FIELDS
+
+
+async def test_concurrent_own_output_check_is_429(client: AsyncClient, resume_id: str) -> None:
+    started = anyio.Event()
+    release = anyio.Event()
+    fixture_render = _fixture_render([])
+
+    async def blocking_render(url: str, *args: Any, **kwargs: Any) -> bytes:
+        started.set()
+        await release.wait()
+        return await fixture_render(url, *args, **kwargs)
+
+    responses: dict[str, Any] = {}
+
+    async def first_check() -> None:
+        responses["first"] = await client.post(
+            f"/api/v1/resumes/{resume_id}/parse-check", json={}
+        )
+
+    with patch("app.routers.resumes.render_resume_pdf", blocking_render):
+        async with client:
+            async with anyio.create_task_group() as group:
+                group.start_soon(first_check)
+                await started.wait()
+                responses["second"] = await client.post(
+                    f"/api/v1/resumes/{resume_id}/parse-check", json={"all_templates": True}
+                )
+                release.set()
+            responses["after"] = await client.post(
+                f"/api/v1/resumes/{resume_id}/parse-check", json={}
+            )
+    assert responses["second"].status_code == 429
+    assert responses["second"].headers["Retry-After"] == str(own_output.BUSY_RETRY_AFTER_SECONDS)
+    assert responses["first"].status_code == 200
+    assert responses["after"].status_code == 200  # the slot is released
+
+
+async def test_single_renderer_slot_is_not_busy_retried(
+    client: AsyncClient, resume_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pdf, "_PDF_MAX_CONCURRENCY", 1)
+
+    def overload_modern(template: str, attempt: int) -> Exception | None:
+        return PDFRenderOverloadedError(RENDER_BUSY_MESSAGE) if template == "modern" else None
+
+    calls: list[str] = []
+    with patch("app.routers.resumes.render_resume_pdf", _fixture_render(calls, overload_modern)):
+        async with client:
+            response = await client.post(
+                f"/api/v1/resumes/{resume_id}/parse-check", json={"all_templates": True}
+            )
+    results = {result["template"]: result for result in response.json()["results"]}
+    assert results["modern"]["error"] == "render_busy"
+    assert results["modern"]["render_attempts"] == 1
+    assert sum(1 for call in calls if _query(call)["template"] == "modern") == 1
+
+
+async def test_user_download_refused_during_a_sweep_gets_the_slot_on_retry(
+    client: AsyncClient, resume_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PDF_MAX_CONCURRENCY=1: the sweep yields the renderer to a refused user."""
+    monkeypatch.setattr(pdf, "_PDF_MAX_CONCURRENCY", 1)
+    monkeypatch.setattr(pdf, "_last_download_refusal", None)
+    monkeypatch.setattr(pdf, "_browser_is_connected", lambda browser: True)
+    monkeypatch.setattr(own_output, "DOWNLOAD_PRIORITY_SECONDS", 1.0)
+    first_sweep_render = anyio.Event()
+    release_first = anyio.Event()
+    first_done = anyio.Event()
+    timeline: list[tuple[str, str, float, float]] = []
+
+    async def shared_browser_render(url: str, *args: Any) -> bytes:
+        who = "sweep" if pdf._background_render.get() else "user"
+        template = _query(url)["template"]
+        start = anyio.current_time()
+        if who == "sweep" and not first_sweep_render.is_set():
+            first_sweep_render.set()
+            await release_first.wait()
+            first_done.set()
+        else:
+            await anyio.sleep(0.05)
+        timeline.append((who, template, start, anyio.current_time()))
+        return (RENDERS / f"{template}.pdf").read_bytes()
+
+    monkeypatch.setattr(pdf, "_render_on_shared_browser", shared_browser_render)
+    responses: dict[str, Any] = {}
+
+    async def sweep() -> None:
+        responses["sweep"] = await client.post(
+            f"/api/v1/resumes/{resume_id}/parse-check", json={"all_templates": True}
+        )
+
+    async with client:
+        async with anyio.create_task_group() as group:
+            group.start_soon(sweep)
+            await first_sweep_render.wait()
+            responses["refused"] = await client.get(f"/api/v1/resumes/{resume_id}/pdf")
+            release_first.set()
+            await first_done.wait()
+            responses["retried"] = await client.get(f"/api/v1/resumes/{resume_id}/pdf")
+
+    assert responses["refused"].status_code == 503
+    assert responses["retried"].status_code == 200
+    assert responses["sweep"].status_code == 200
+    assert {result["status"] for result in responses["sweep"].json()["results"]} == {"ok"}
+    [user_render] = [entry for entry in timeline if entry[0] == "user"]
+    later_sweep_renders = [entry for entry in timeline if entry[0] == "sweep"][1:]
+    assert len(later_sweep_renders) == len(TEMPLATE_IDS) - 1
+    assert all(entry[2] >= user_render[3] for entry in later_sweep_renders)
+
+
+async def test_extraction_timeout_is_bounded_by_budget_and_engine_limit(
+    client: AsyncClient, resume_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    timeouts: list[float] = []
+    real_run_parse_check = own_output.run_parse_check
+
+    async def spy(*args: Any, timeout_seconds: float, **kwargs: Any) -> Any:
+        timeouts.append(timeout_seconds)
+        return await real_run_parse_check(*args, timeout_seconds=timeout_seconds, **kwargs)
+
+    monkeypatch.setattr(own_output, "run_parse_check", spy)
+    with patch("app.routers.resumes.render_resume_pdf", _fixture_render([])):
+        async with client:
+            response = await client.post(
+                f"/api/v1/resumes/{resume_id}/parse-check", json={"all_templates": True}
+            )
+    assert response.status_code == 200
+    assert len(timeouts) == len(TEMPLATE_IDS)
+    # The 200 s sweep budget never grants one extraction more than the engine limit.
+    assert max(timeouts) <= PARSE_CHECK_TIMEOUT_SECONDS
+
+
+async def test_extraction_is_not_started_with_under_a_second_left(
+    client: AsyncClient, resume_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(own_output, "MIN_ANALYSIS_SECONDS", 0.0)
+    monkeypatch.setattr(own_output, "SINGLE_TEMPLATE_BUDGET_SECONDS", 1.2)
+    started: list[bool] = []
+
+    async def never_called(*args: Any, **kwargs: Any) -> Any:
+        started.append(True)
+        raise AssertionError("extraction started")
+
+    monkeypatch.setattr(own_output, "run_parse_check", never_called)
+    fixture_render = _fixture_render([])
+
+    async def slow_render(url: str, *args: Any, **kwargs: Any) -> bytes:
+        await anyio.sleep(0.5)
+        return await fixture_render(url, *args, **kwargs)
+
+    with patch("app.routers.resumes.render_resume_pdf", slow_render):
+        async with client:
+            response = await client.post(f"/api/v1/resumes/{resume_id}/parse-check", json={})
+    assert response.status_code == 504
+    assert started == []

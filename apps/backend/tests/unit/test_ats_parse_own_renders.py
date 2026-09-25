@@ -10,7 +10,7 @@ import json
 import re
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
@@ -22,6 +22,8 @@ from app.services.ats_parse.templates import (
     LOCALIZED_DEFAULT_HEADINGS,
     TEMPLATE_IDS,
     TEMPLATE_LAYOUTS,
+    RenderLocale,
+    localize_section_meta,
 )
 
 RENDERS = Path(__file__).resolve().parents[1] / "fixtures" / "ats_parse" / "renders"
@@ -154,11 +156,26 @@ def test_spanish_render_locale_keeps_english_checks_and_spanish_headings() -> No
     assert fields["heading.education"] == "found"
 
 
-def test_contact_icons_are_vector_drawings_not_icon_font_glyphs() -> None:
-    """The templates draw contact icons as inline SVG, which extracts no text."""
-    icons = _checks("swiss-single-icons")
-    assert icons["icon_font_glyphs"].status == "pass"
-    assert _report("swiss-single-icons").roundtrip.content_recall == 1.0  # type: ignore[union-attr]
+def test_contact_icons_are_inline_svg_components() -> None:
+    """``showContactIcons`` draws lucide-react icons, i.e. inline SVG paths,
+    which extract no text: they cannot trip ``icon_font_glyphs`` the way an
+    icon font's Private Use Area glyphs do (``icon_font.pdf``)."""
+    components = [
+        path
+        for path in sorted((FRONTEND / "components" / "resume").glob("resume-*.tsx"))
+        if "showContactIcons" in path.read_text()
+    ]
+    assert len(components) == len(TEMPLATE_IDS)
+    for path in components:
+        source = path.read_text()
+        imported = re.search(r"import \{([^}]*)\} from 'lucide-react';", source)
+        assert imported is not None, path.name
+        lucide = {name.strip() for name in imported.group(1).split(",")}
+        block = source.split("const contactIcons", 1)[1].split("= {", 1)[1].split("};", 1)[0]
+        icons = set(re.findall(r"<(\w+)", block))
+        assert icons, path.name
+        assert icons <= lucide, path.name
+        assert "className" not in block, path.name  # no icon-font class names
 
 
 def test_small_caps_private_use_glyphs_are_reported() -> None:
@@ -195,9 +212,28 @@ def test_template_ids_match_the_frontend() -> None:
     assert tuple(re.findall(r"'([a-z-]+)'", block)) == TEMPLATE_IDS
 
 
+def _frontend_locales() -> tuple[str, ...]:
+    config = (FRONTEND / "i18n" / "config.ts").read_text()
+    block = config.split("export const locales =", 1)[1].split("]", 1)[0]
+    return tuple(re.findall(r"'([A-Za-z-]+)'", block))
+
+
+def _locale_message_files() -> dict[str, str]:
+    """Locale -> message file, as ``lib/i18n/messages.ts`` imports them."""
+    loader = (FRONTEND / "lib" / "i18n" / "messages.ts").read_text()
+    return dict(re.findall(r"import (\w+) from '@/messages/([\w-]+\.json)';", loader))
+
+
+def test_render_locales_are_the_frontend_locales() -> None:
+    assert set(get_args(RenderLocale)) == set(_frontend_locales())
+    assert set(LOCALIZED_DEFAULT_HEADINGS) == set(_frontend_locales())
+    assert _locale_message_files()["pt"] == "pt-BR.json"
+
+
 @pytest.mark.parametrize("locale", sorted(LOCALIZED_DEFAULT_HEADINGS))
 def test_localized_default_headings_match_the_locale_files(locale: str) -> None:
-    messages = json.loads((FRONTEND / "messages" / f"{locale}.json").read_text())
+    message_file = _locale_message_files()[locale]
+    messages = json.loads((FRONTEND / "messages" / message_file).read_text())
     sections = messages["resume"]["sections"]
     assert LOCALIZED_DEFAULT_HEADINGS[locale] == {
         "summary": sections["summary"],
@@ -208,9 +244,13 @@ def test_localized_default_headings_match_the_locale_files(locale: str) -> None:
     }
 
 
-def test_every_frontend_locale_has_localized_headings() -> None:
-    locales = {path.stem for path in (FRONTEND / "messages").glob("*.json")}
-    assert locales == set(LOCALIZED_DEFAULT_HEADINGS)
+def test_portuguese_render_locale_localizes_headings_from_pt_br_file() -> None:
+    sections = json.loads((FRONTEND / "messages" / "pt-BR.json").read_text())["resume"]["sections"]
+    localized = localize_section_meta(_source(), "pt")
+    names = {entry["key"]: entry["displayName"] for entry in localized["sectionMeta"]}
+    assert names["workExperience"] == sections["experience"]
+    assert names["education"] == sections["education"]
+    assert names["publications"] == "Publications"  # custom sections keep their name
 
 
 def test_expected_by_template_is_rendered_in_the_english_message() -> None:

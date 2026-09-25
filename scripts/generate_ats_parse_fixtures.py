@@ -391,6 +391,46 @@ def icon_font_pdf() -> bytes:
     return _assemble_pdf(objects)
 
 
+WATERMARK_TEXT = "CONFIDENTIAL DRAFT"
+
+
+def rotated_watermark_pdf() -> bytes:
+    """Single-column resume with a large, semi-transparent 45-degree watermark
+    drawn inside a form XObject (as Chromium draws text with CSS opacity).
+
+    The watermark crosses the body rows, so if its diagonal bounding box took
+    part in row reconstruction it would merge into a body row.
+    """
+    lines: list[tuple[str, int, int, str]] = [
+        ("F2", 72, 740, _pdf_literal(NAME)),
+        ("F2", 72, 724, _pdf_literal(f"{EMAIL} | {PHONE} | {LINKEDIN}")),
+    ]
+    y = 710
+    for text in _BODY_LINES:
+        y -= 28
+        lines.append(("F2", 72, y, _pdf_literal(text)))
+    content = _text_ops(lines) + b"\nq /Wm Do Q"
+    watermark = (
+        f"q /G1 gs BT /F2 48 Tf 0.7071 0.7071 -0.7071 0.7071 150 400 Tm "
+        f"{_pdf_literal(WATERMARK_TEXT)} Tj ET Q"
+    ).encode("latin-1")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F2 5 0 R >> /XObject << /Wm 6 0 R >> >> /Contents 4 0 R >>",
+        _stream(content),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        _stream(
+            watermark,
+            b" /Type /XObject /Subtype /Form /BBox [0 0 612 792]"
+            b" /Resources << /Font << /F2 5 0 R >> /ExtGState << /G1 7 0 R >> >>",
+        ),
+        b"<< /Type /ExtGState /ca 0.15 /CA 0.15 >>",
+    ]
+    return _assemble_pdf(objects)
+
+
 def cid_glyphs_pdf() -> bytes:
     """Body text in a CID font with no ToUnicode map, so glyphs stay unmapped."""
     lines: list[tuple[str, int, int, str]] = [
@@ -575,6 +615,7 @@ def main(selected: set[str]) -> None:
     outputs: dict[str, bytes] = {
         "icon_font.pdf": icon_font_pdf(),
         "cid_glyphs.pdf": cid_glyphs_pdf(),
+        "rotated_watermark.pdf": rotated_watermark_pdf(),
         "decompression_bomb.pdf": decompression_bomb_pdf(),
         "legacy.doc": legacy_doc_stub(),
         "clean.docx": _docx_bytes(clean_docx),

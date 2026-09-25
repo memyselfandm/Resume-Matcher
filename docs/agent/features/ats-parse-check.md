@@ -46,6 +46,11 @@ pdfminer's hierarchical text-box grouping (`boxes_flow`) is disabled: it is
 quadratic in the number of boxes, and the engine never uses box order. Text
 inside form XObjects is grouped too (`all_texts`): Chromium draws
 semi-transparent text (CSS `opacity`) inside one, and extractors read it.
+Rotated or skewed lines (a diagonal "DRAFT" watermark, a vertical side label)
+are kept in the text, each as its own row after the page's rows, but take no
+part in row reconstruction or the layout checks: their bounding box spans the
+page diagonally and would otherwise merge into body rows and block every
+gutter band (`rotated_watermark.pdf`).
 
 | Status | Meaning |
 |--------|---------|
@@ -147,11 +152,12 @@ the full settings object: the frontend `TemplateSettings` (defaults equal
 `DEFAULT_TEMPLATE_SETTINGS`) plus `lang`, i.e. all 17 query parameters of
 that route. The endpoint fetches that PDF, and the payload the print page
 renders (`GET /api/v1/resumes?resume_id=` -> `processed_resume`), through the
-in-process ASGI bridge (`app/mcp/bridge.py`), so validation and the print URL
-are the download route's own. Nothing is stored.
+in-process ASGI client (`app/internal_client.py`), so validation and the
+print URL are the download route's own. Nothing is stored.
 
-- `settings.lang` is the render locale (`en`, `es`, `fr`, `ja`, `ko`, `pt-BR`,
-  `zh`): it localizes default section headings, and the heading checks expect
+- `settings.lang` is the render locale, one of the frontend locales (`en`,
+  `es`, `zh`, `ja`, `pt`, `fr`, `ko`; Portuguese is `pt`, whose strings live in
+  `messages/pt-BR.json`): it localizes default section headings, and the heading checks expect
   that locale's headings. `content_language` is the language of the resume
   text; it defaults to the configured content language and gates the
   English-lexicon checks. The two are independent.
@@ -161,7 +167,16 @@ are the download route's own. Nothing is stored.
 - Budgets: 60 s for one template, 200 s for all seven. Renderer admission is
   fail-fast (a busy renderer returns 503 instead of queueing), so a busy
   render is retried up to 3 attempts with 1 s / 2 s backoff while the budget
-  allows. Other render failures are not retried.
+  allows. Other render failures are not retried. One extraction never gets
+  more than the engine's 60 s, and is not started with under 1 s left.
+- Renderer fairness: one own-output check runs at a time per process; another
+  request gets 429 with `Retry-After: 10` instead of queueing. The check
+  renders sequentially (at most one renderer slot) and marks its renders as
+  background work: after a user download is refused as busy, it starts no
+  render for 10 s, so a user who retries gets the slot before the next
+  template. With `PDF_MAX_CONCURRENCY=1` it also never retries a busy
+  renderer, since the only slot is then a user's. Waiting counts against the
+  budget; templates it cannot reach are `timed_out`.
 
 Response:
 
@@ -178,8 +193,8 @@ Response:
 ```
 
 `status` is `ok`, `render_failed` (`error`: `render_busy` after all retries,
-`render_timeout`, or `render_error`), or `timed_out` (`error`:
-`budget_exhausted`). With `all_templates` the response is 200 whatever the
+`render_timeout`, `render_error`, or `analysis_error` when the rendered PDF
+cannot be read), or `timed_out` (`error`: `budget_exhausted`). With `all_templates` the response is 200 whatever the
 per-template outcome.
 
 | Status | Meaning |
@@ -188,6 +203,8 @@ per-template outcome.
 | 404 | Unknown resume id |
 | 409 | The resume has no structured data yet (still processing, or failed) |
 | 422 | Invalid settings, locale, or `content_language` (unknown fields are rejected) |
+| 429 | Another own-output check is running (`Retry-After` seconds) |
+| 500 | Single template: the rendered PDF could not be analyzed |
 | 503 | Single template: renderer busy after retries, or render failed |
 | 504 | Single template: render or analysis exceeded the budget |
 
@@ -213,6 +230,9 @@ names the way the print page does.
   the template's render order.
 - Fields in hidden sections are `hidden`; fields a template does not print are
   `not_rendered`. Neither counts against recall.
+- At most 1,000 expected fields are compared (`roundtrip.truncated` is then
+  `true`), and the check's deadline is enforced per field, so a huge payload
+  cannot run past the budget.
 
 `app/services/ats_parse/templates.py` holds each template's rendered-field
 map and render order, mirroring `apps/frontend/components/resume/`: every
@@ -305,7 +325,7 @@ pinned `LAParams`, row reconstruction, python-docx structure), `layout_checks.py
 `content_checks.py` (language detection and gating), `roundtrip.py`
 (self-consistency against a source payload), `templates.py` (rendered-field
 maps, render order, localized default headings), `own_output.py` (render
-through the bridge, retries, budgets), `profiles.py`, `report.py`,
+through the internal client, retries, budgets, fairness), `profiles.py`, `report.py`,
 `messages_en.py`, `engine.py`.
 
 Fixtures in `apps/backend/tests/fixtures/ats_parse/` are synthetic and

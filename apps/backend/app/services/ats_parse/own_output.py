@@ -10,6 +10,15 @@ Renderer admission is fail-fast (``PDFRenderOverloadedError`` -> 503), never
 queued, so each template render is retried with backoff while the overall
 budget allows. A template that still cannot be rendered is reported as
 ``render_failed`` and the other templates' reports are still returned.
+
+Renderer fairness: only one own-output check runs per process (a second one
+is refused with ``OwnOutputBusyError`` instead of queueing), and its renders
+are sequential, so it holds at most one renderer slot. Its renders are marked
+as background work (``pdf.background_renders``): after a user download is
+refused as busy, the check starts no render for ``DOWNLOAD_PRIORITY_SECONDS``,
+so a user who retries within that window gets the slot instead of the next
+template. With ``PDF_MAX_CONCURRENCY=1`` the check also never retries a busy
+renderer, since the only slot is then held by a user download.
 """
 
 from __future__ import annotations
@@ -23,9 +32,10 @@ import anyio
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.types import ASGIApp
 
-from app.mcp.bridge import AppBridge, BridgeError, path_segment
+from app import pdf
+from app.internal_client import InternalClient, InternalRequestError, path_segment
 from app.pdf import RENDER_BUSY_MESSAGE, RENDER_TIMEOUT_MESSAGE
-from app.services.ats_parse.engine import run_parse_check
+from app.services.ats_parse.engine import PARSE_CHECK_TIMEOUT_SECONDS, run_parse_check
 from app.services.ats_parse.report import ParseCheckReport
 from app.services.ats_parse.templates import (
     DEFAULT_RENDER_LOCALE,
@@ -34,6 +44,7 @@ from app.services.ats_parse.templates import (
     RenderLocale,
     TemplateId,
 )
+from app.services.parser import DocumentResourceLimitError, DocumentValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +54,21 @@ MAX_RENDER_ATTEMPTS = 3
 RENDER_RETRY_BACKOFF_SECONDS = (1.0, 2.0)
 # Budget kept for extraction after the last render of a template.
 MIN_ANALYSIS_SECONDS = 5.0
+# Extraction is not started with less time than this left.
+MIN_EXTRACTION_SECONDS = 1.0
+# After a user download is refused as busy, no render starts for this long.
+DOWNLOAD_PRIORITY_SECONDS = 10.0
+# One own-output check per process; others are refused, never queued.
+MAX_CONCURRENT_CHECKS = 1
+BUSY_RETRY_AFTER_SECONDS = 10
+_active_checks = 0
 
 SpacingLevel = int
 FontFamily = Literal["serif", "sans-serif", "mono"]
 TemplateStatus = Literal["ok", "render_failed", "timed_out"]
-TemplateError = Literal["render_busy", "render_timeout", "render_error", "budget_exhausted"]
+TemplateError = Literal[
+    "render_busy", "render_timeout", "render_error", "analysis_error", "budget_exhausted"
+]
 
 
 class MarginSettings(BaseModel):
@@ -147,6 +168,10 @@ class OwnOutputParseCheck(BaseModel):
     results: list[TemplateParseCheck]
 
 
+class OwnOutputBusyError(Exception):
+    """Another own-output check is running in this process."""
+
+
 class ResumeNotFoundError(Exception):
     """The resume does not exist."""
 
@@ -163,7 +188,7 @@ class RenderUnavailableError(Exception):
         self.result = result
 
 
-def _render_error_code(error: BridgeError) -> TemplateError:
+def _render_error_code(error: InternalRequestError) -> TemplateError:
     if str(error) == RENDER_BUSY_MESSAGE:
         return "render_busy"
     if str(error) == RENDER_TIMEOUT_MESSAGE:
@@ -171,26 +196,50 @@ def _render_error_code(error: BridgeError) -> TemplateError:
     return "render_error"
 
 
+async def _yield_to_downloads(
+    deadline: float, sleep: Callable[[float], Awaitable[None]]
+) -> bool:
+    """Wait until no user download was refused in ``DOWNLOAD_PRIORITY_SECONDS``.
+
+    Returns ``False`` when that wait would leave no budget for a render.
+    """
+    while True:
+        elapsed = pdf.seconds_since_download_refusal()
+        if elapsed is None or elapsed >= DOWNLOAD_PRIORITY_SECONDS:
+            return True
+        wait = DOWNLOAD_PRIORITY_SECONDS - elapsed
+        if deadline - time.monotonic() - MIN_ANALYSIS_SECONDS <= wait:
+            return False
+        await sleep(wait)
+
+
 async def _render_with_retry(
-    bridge: AppBridge,
+    client: InternalClient,
     resume_id: str,
     params: dict[str, str | int],
     deadline: float,
     sleep: Callable[[float], Awaitable[None]],
 ) -> tuple[bytes | None, int, TemplateError | None]:
-    """Render one template; retry only a busy renderer, within the budget."""
+    """Render one template; retry only a busy renderer, within the budget.
+
+    With a single renderer slot a busy renderer is not retried: the slot is
+    in use by a user download (this check renders sequentially).
+    """
+    attempts_allowed = MAX_RENDER_ATTEMPTS if pdf.render_capacity() > 1 else 1
     error: TemplateError | None = None
-    for attempt in range(1, MAX_RENDER_ATTEMPTS + 1):
+    for attempt in range(1, attempts_allowed + 1):
+        if not await _yield_to_downloads(deadline, sleep):
+            return None, attempt - 1, error or "budget_exhausted"
         remaining = deadline - time.monotonic() - MIN_ANALYSIS_SECONDS
         if remaining <= 0:
             return None, attempt - 1, error or "budget_exhausted"
         try:
-            with anyio.fail_after(remaining):
-                response = await bridge.request("GET", f"/resumes/{resume_id}/pdf", params=params)
+            with anyio.fail_after(remaining), pdf.background_renders():
+                response = await client.request("GET", f"/resumes/{resume_id}/pdf", params=params)
             return response.content, attempt, None
         except TimeoutError:
             return None, attempt, "budget_exhausted"
-        except BridgeError as exc:
+        except InternalRequestError as exc:
             if exc.status_code == 404:
                 raise ResumeNotFoundError from exc
             if exc.status_code != 503:
@@ -199,16 +248,28 @@ async def _render_with_retry(
             error = _render_error_code(exc)
             if error != "render_busy":
                 return None, attempt, error
-        if attempt < MAX_RENDER_ATTEMPTS:
+        if attempt < attempts_allowed:
             backoff = RENDER_RETRY_BACKOFF_SECONDS[attempt - 1]
             if deadline - time.monotonic() - MIN_ANALYSIS_SECONDS <= backoff:
                 return None, attempt, error
             await sleep(backoff)
-    return None, MAX_RENDER_ATTEMPTS, error
+    return None, attempts_allowed, error
+
+
+def _failed(
+    template: TemplateId, attempts: int, error: TemplateError, status: TemplateStatus
+) -> TemplateParseCheck:
+    return TemplateParseCheck(
+        template=template,
+        status=status,
+        expected_by_template=TEMPLATE_LAYOUTS[template].two_column,
+        render_attempts=attempts,
+        error=error,
+    )
 
 
 async def _check_template(
-    bridge: AppBridge,
+    client: InternalClient,
     resume_id: str,
     source: dict[str, Any],
     template: TemplateId,
@@ -217,51 +278,44 @@ async def _check_template(
     deadline: float,
     sleep: Callable[[float], Awaitable[None]],
 ) -> TemplateParseCheck:
-    layout = TEMPLATE_LAYOUTS[template]
-    pdf, attempts, error = await _render_with_retry(
-        bridge, resume_id, settings.pdf_query(template), deadline, sleep
+    content, attempts, error = await _render_with_retry(
+        client, resume_id, settings.pdf_query(template), deadline, sleep
     )
-    if pdf is None:
+    if content is None:
+        error = error or "render_error"
         status: TemplateStatus = "timed_out" if error == "budget_exhausted" else "render_failed"
-        return TemplateParseCheck(
-            template=template,
-            status=status,
-            expected_by_template=layout.two_column,
-            render_attempts=attempts,
-            error=error,
-        )
+        return _failed(template, attempts, error, status)
     remaining = deadline - time.monotonic()
+    if remaining < MIN_EXTRACTION_SECONDS:
+        return _failed(template, attempts, "budget_exhausted", "timed_out")
     try:
         report = await run_parse_check(
-            pdf,
+            content,
             "render.pdf",
             content_language=content_language,
             render_locale=settings.lang or DEFAULT_RENDER_LOCALE,
             template=template,
             roundtrip_source=source,
-            timeout_seconds=max(remaining, 1.0),
+            timeout_seconds=min(remaining, PARSE_CHECK_TIMEOUT_SECONDS),
         )
     except TimeoutError:
-        return TemplateParseCheck(
-            template=template,
-            status="timed_out",
-            expected_by_template=layout.two_column,
-            render_attempts=attempts,
-            error="budget_exhausted",
-        )
+        return _failed(template, attempts, "budget_exhausted", "timed_out")
+    except (DocumentValidationError, DocumentResourceLimitError):
+        logger.warning("Rendered PDF of template %s could not be analyzed", template)
+        return _failed(template, attempts, "analysis_error", "render_failed")
     return TemplateParseCheck(
         template=template,
         status="ok",
-        expected_by_template=layout.two_column,
+        expected_by_template=TEMPLATE_LAYOUTS[template].two_column,
         render_attempts=attempts,
         report=report,
     )
 
 
-async def _load_rendered_payload(bridge: AppBridge, resume_id: str) -> dict[str, Any]:
+async def _load_rendered_payload(client: InternalClient, resume_id: str) -> dict[str, Any]:
     try:
-        body = await bridge.get_json("/resumes", params={"resume_id": resume_id})
-    except BridgeError as exc:
+        body = await client.get_json("/resumes", params={"resume_id": resume_id})
+    except InternalRequestError as exc:
         if exc.status_code == 404:
             raise ResumeNotFoundError from exc
         raise
@@ -287,26 +341,23 @@ async def check_own_output(
 
     Raises:
         InvalidIdentifierError: ``resume_id`` is not a safe id.
+        OwnOutputBusyError: another own-output check is running.
         ResumeNotFoundError: no such resume.
         ResumeNotProcessedError: the resume has no structured data yet.
         RenderUnavailableError: single-template mode could not render or
             analyze the PDF (all-templates mode reports this per template).
     """
+    global _active_checks
     resume_id = path_segment(resume_id, "resume id")
-    budget = ALL_TEMPLATES_BUDGET_SECONDS if all_templates else SINGLE_TEMPLATE_BUDGET_SECONDS
-    deadline = time.monotonic() + budget
-    templates: tuple[TemplateId, ...] = TEMPLATE_IDS if all_templates else (settings.template,)
-    bridge = AppBridge(app)
+    if _active_checks >= MAX_CONCURRENT_CHECKS:
+        raise OwnOutputBusyError
+    _active_checks += 1
     try:
-        source = await _load_rendered_payload(bridge, resume_id)
-        results = [
-            await _check_template(
-                bridge, resume_id, source, template, settings, content_language, deadline, sleep
-            )
-            for template in templates
-        ]
+        results = await _run_checks(
+            app, resume_id, settings, content_language, all_templates, sleep
+        )
     finally:
-        await bridge.aclose()
+        _active_checks -= 1
     if not all_templates and results[0].status != "ok":
         raise RenderUnavailableError(results[0])
     return OwnOutputParseCheck(
@@ -315,3 +366,29 @@ async def check_own_output(
         settings=settings,
         results=results,
     )
+
+
+async def _run_checks(
+    app: ASGIApp,
+    resume_id: str,
+    settings: TemplateSettings,
+    content_language: str,
+    all_templates: bool,
+    sleep: Callable[[float], Awaitable[None]],
+) -> list[TemplateParseCheck]:
+    budget = ALL_TEMPLATES_BUDGET_SECONDS if all_templates else SINGLE_TEMPLATE_BUDGET_SECONDS
+    deadline = time.monotonic() + budget
+    templates: tuple[TemplateId, ...] = TEMPLATE_IDS if all_templates else (settings.template,)
+    client = InternalClient(app)
+    results: list[TemplateParseCheck] = []
+    try:
+        source = await _load_rendered_payload(client, resume_id)
+        for template in templates:
+            results.append(
+                await _check_template(
+                    client, resume_id, source, template, settings, content_language, deadline, sleep
+                )
+            )
+    finally:
+        await client.aclose()
+    return results

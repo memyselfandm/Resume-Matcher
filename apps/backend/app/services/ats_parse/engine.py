@@ -138,6 +138,7 @@ def build_report(
             rendered_fields=layout.rendered_fields if layout else None,
             personal_order=layout.personal_order if layout else None,
             body_order=layout.body_order if layout else None,
+            deadline=deadline,
         )
     score = overall_score(checks)
     if not text_layer and document.dense_pages:
