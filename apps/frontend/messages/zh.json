@@ -1114,5 +1114,363 @@
       "skillGaps": "技能差距",
       "talkingPoints": "沟通要点"
     }
+  },
+  "atsParseCheck": {
+    "title": "ATS 解析检查",
+    "intro": "检查 ATS 类文本提取器能否读取这份简历的 PDF。",
+    "selfConsistency": "自洽性检查：衡量文本提取器能否从文件中还原简历本身的内容。它不是真实 ATS 的判定结果，也不评估关键词匹配度。",
+    "show": "显示解析检查",
+    "hide": "隐藏解析检查",
+    "run": "运行解析检查",
+    "rerun": "重新检查",
+    "cancel": "取消检查",
+    "running": "正在检查…",
+    "runningAll": "正在生成并检查全部 7 个模板…",
+    "elapsed": "{seconds} 秒",
+    "allTemplates": "检查所有模板",
+    "allTemplatesDescription": "使用当前设置生成全部 7 个模板，耗时更长。",
+    "currentTemplate": "模板：{template}",
+    "savedVersionNote": "检查这份简历最近保存的版本。",
+    "unsavedChangesNote": "你有未保存的更改。检查使用最近保存的版本。",
+    "masterResumeNote": "按照已保存的模板设置生成并检查你的主简历。定制简历确认后，可在编辑器中检查。",
+    "noResume": "请先保存或上传简历，再运行解析检查。",
+    "empty": "运行检查，查看 ATS 类提取器如何读取这份简历。",
+    "scores": {
+      "parseability": "可解析性",
+      "parseabilityHint": "提取与版式：文本能否按顺序读取？",
+      "content": "内容",
+      "contentHint": "联系方式、标题、日期：预期内容是否齐全？",
+      "separateNote": "两项得分相互独立：解析良好但内容单薄的简历，可解析性得分依然较高。",
+      "notAvailable": "不适用",
+      "outOf": "/100"
+    },
+    "extractability": {
+      "label": "文本提取",
+      "full": "完整",
+      "partial": "部分",
+      "none": "无",
+      "unsupported_format": "不支持的格式"
+    },
+    "severity": {
+      "fatal": "致命",
+      "high": "高",
+      "medium": "中",
+      "low": "低"
+    },
+    "status": {
+      "pass": "通过",
+      "fail": "未通过",
+      "not_applicable": "不适用"
+    },
+    "category": {
+      "extraction": "提取",
+      "layout": "版式",
+      "content": "内容"
+    },
+    "issues": "问题（{count}）",
+    "noIssues": "未发现问题。",
+    "passedChecks": "已通过的检查（{count}）",
+    "notApplicableChecks": "不适用（{count}）",
+    "expectedByTemplate": "此模板的预期结果",
+    "expectedByTemplateHint": "此模板设计为双栏。由于 ATS 可能按错误顺序读取各栏，仍会报告该信号。",
+    "twoColumn": "双栏",
+    "checks": {
+      "file_format": {
+        "title": "文件格式",
+        "fail": "不分析旧版 .doc 文件。请将简历另存为 PDF 或 DOCX 后重新检查。",
+        "pass": "文件格式受支持。"
+      },
+      "text_layer": {
+        "title": "文本层",
+        "fail": "未找到可选中的文本。ATS 看到的是一份空白简历；请导出基于文本的 PDF。",
+        "pass": "找到了可选中的文本。"
+      },
+      "truncated": {
+        "title": "分析上限",
+        "fail": "文档有部分内容未被分析（上限：{page_limit} 页、{char_limit} 个字符；因过于密集而跳过的页面：{dense_pages}）。",
+        "pass": "已分析整份文档。"
+      },
+      "unmapped_glyphs": {
+        "title": "未映射字形",
+        "fail": "有 {count} 个字符被提取为 (cid:NN) 占位符。字体缺少 Unicode 映射，ATS 读到的将是乱码。",
+        "pass": "所有字符都能映射为可读文本。"
+      },
+      "icon_font_glyphs": {
+        "title": "图标字体",
+        "fail": "提取出 {count} 个图标字体字符。请用纯文本标签替换图标。",
+        "pass": "未提取出图标字体字符。"
+      },
+      "replacement_characters": {
+        "title": "不可读字符",
+        "fail": "提取出 {count} 个不可读的替换字符或控制字符。",
+        "pass": "未提取出不可读字符。"
+      },
+      "text_as_image": {
+        "title": "图片形式的文本",
+        "fail": "第 {pages} 页几乎全是图片、文字很少；这些内容很可能对 ATS 不可见。",
+        "pass": "没有页面把文本渲染为图片。"
+      },
+      "multi_column": {
+        "title": "分栏",
+        "fail": "检测到多栏版式。ATS 可能按错误的顺序读取各栏。",
+        "pass": "单栏阅读顺序。"
+      },
+      "sidebar": {
+        "title": "侧边栏",
+        "fail": "在第 {pages} 页检测到窄侧边栏。侧边栏内容常被并入正文或被忽略。",
+        "pass": "未检测到侧边栏。"
+      },
+      "tables": {
+        "title": "表格",
+        "fail": "检测到表格。表格中的内容常被忽略或打乱。",
+        "pass": "未检测到表格。"
+      },
+      "images": {
+        "title": "图片",
+        "fail": "检测到图片。ATS 无法读取图片中的文字。",
+        "pass": "未检测到图片。"
+      },
+      "text_boxes": {
+        "title": "文本框",
+        "fail": "文本框中有 {chars} 个字符，许多 ATS 会跳过这些内容。",
+        "pass": "未检测到文本框。"
+      },
+      "header_footer_contact": {
+        "title": "页眉或页脚中的联系方式",
+        "fail": "联系方式（{fields}）只出现在页眉或页脚中，而许多 ATS 会忽略这些区域。",
+        "pass": "联系方式位于正文中。"
+      },
+      "page_count": {
+        "title": "页数",
+        "fail": "简历共 {pages} 页；大多数系统更偏好 {max_pages} 页以内。",
+        "pass": "页数在建议范围内。"
+      },
+      "contact_email": {
+        "title": "邮箱",
+        "fail": "在提取的文本中未找到邮箱地址。",
+        "pass": "找到了邮箱地址。"
+      },
+      "contact_phone": {
+        "title": "电话",
+        "fail": "在提取的文本中未找到电话号码。",
+        "pass": "找到了电话号码。"
+      },
+      "contact_linkedin": {
+        "title": "LinkedIn",
+        "fail": "在提取的文本中未找到 LinkedIn 个人主页链接。",
+        "pass": "找到了 LinkedIn 个人主页。"
+      },
+      "section_headings": {
+        "title": "章节标题",
+        "fail": "未找到标准章节标题：{missing}。",
+        "pass": "找到了标准章节标题。"
+      },
+      "dates_present": {
+        "title": "日期",
+        "fail": "只找到 {count} 处年份；请为每段经历添加日期。",
+        "pass": "找到了日期。"
+      },
+      "month_year_dates": {
+        "title": "年月",
+        "fail": "日期缺少月份；请使用 'Jan 2021' 或 '01/2021' 这样的格式。",
+        "pass": "日期包含月份。"
+      },
+      "action_verbs": {
+        "title": "行为动词",
+        "fail": "找到 {count} 个不同的行为动词；建议至少 {min_count} 个。",
+        "pass": "要点中使用了多样的行为动词。"
+      },
+      "quantification": {
+        "title": "可量化成果",
+        "fail": "有 {count} 行包含可量化成果；建议至少 {min_count} 行。",
+        "pass": "成果已量化。"
+      },
+      "length": {
+        "title": "篇幅",
+        "fail": "简历共 {words} 个词（{verdict}）；建议 {min_words}–{max_words} 个词。",
+        "pass": "篇幅在建议范围内。"
+      }
+    },
+    "notApplicable": {
+      "no_text": "未检查：没有提取到文本。",
+      "content_language": "未检查：此项仅适用于部分简历语言。",
+      "docx": "DOCX 文件不检查此项。",
+      "pdf": "仅适用于 DOCX 文件。",
+      "doc": ".doc 文件不检查此项。",
+      "covered_by_multi_column": "已包含在分栏检查中。",
+      "dense_pages": "未检查：有页面因过于密集而被跳过。",
+      "default": "不适用。"
+    },
+    "params": {
+      "none": "无",
+      "listSeparator": "、",
+      "sections": {
+        "experience": "工作经历",
+        "education": "教育背景",
+        "skills": "技能"
+      },
+      "contactFields": {
+        "email": "邮箱",
+        "phone": "电话"
+      },
+      "verdict": {
+        "short": "过短",
+        "long": "过长",
+        "ok": "在范围内"
+      }
+    },
+    "roundtrip": {
+      "title": "往返检查",
+      "recall": "内容召回率",
+      "recallHint": "简历中已渲染的字段在提取文本中被找到的比例。",
+      "fidelity": "顺序保真度",
+      "fidelityHint": "提取顺序与渲染顺序的一致程度。",
+      "truncated": "仅比较了前 1,000 个字段。",
+      "problemFields": "缺失或错乱的字段（{count}）",
+      "allFound": "所有已渲染的字段均已还原。",
+      "notRenderedCount": "有 {count} 个字段未被此模板打印或已隐藏，不计入召回率。",
+      "entryField": "{section} {index}：{field}",
+      "headingField": "标题：{section}",
+      "fieldStatus": {
+        "found": "已找到",
+        "garbled": "错乱",
+        "missing": "缺失",
+        "not_rendered": "未渲染",
+        "hidden": "已隐藏"
+      }
+    },
+    "sections": {
+      "summary": "个人简介",
+      "workExperience": "工作经历",
+      "education": "教育背景",
+      "personalProjects": "项目",
+      "additional": "技能与奖项",
+      "custom": "自定义章节"
+    },
+    "fields": {
+      "personalInfo": {
+        "name": "姓名",
+        "title": "职位",
+        "email": "邮箱",
+        "phone": "电话",
+        "location": "所在地",
+        "website": "网站",
+        "linkedin": "LinkedIn",
+        "github": "GitHub"
+      },
+      "summary": "个人简介",
+      "heading": "章节标题",
+      "workExperience": {
+        "title": "职位",
+        "company": "公司",
+        "location": "地点",
+        "years": "时间",
+        "description": "要点"
+      },
+      "education": {
+        "degree": "学位",
+        "institution": "学校",
+        "years": "时间",
+        "description": "要点"
+      },
+      "personalProjects": {
+        "name": "项目名称",
+        "role": "角色",
+        "years": "时间",
+        "description": "要点"
+      },
+      "additional": {
+        "heading": "技能与奖项标题",
+        "technicalSkills": "技能",
+        "languages": "语言",
+        "certificationsTraining": "证书",
+        "awards": "奖项"
+      },
+      "customSections": {
+        "title": "标题",
+        "subtitle": "副标题",
+        "location": "地点",
+        "years": "时间",
+        "description": "要点",
+        "strings": "条目",
+        "text": "文本"
+      }
+    },
+    "profiles": {
+      "title": "启发式 ATS 画像",
+      "disclaimer": "近似值：按各系统公认的解析严格程度对上述检查重新加权，未经厂商验证。",
+      "passes": "大概率可解析",
+      "atRisk": "存在风险",
+      "names": {
+        "workday": "Workday",
+        "taleo": "Taleo",
+        "successfactors": "SuccessFactors",
+        "icims": "iCIMS",
+        "greenhouse": "Greenhouse",
+        "lever": "Lever"
+      }
+    },
+    "templates": {
+      "title": "所有模板",
+      "caption": "使用当前设置时各模板的解析检查结果",
+      "template": "模板",
+      "status": "状态",
+      "details": "详情",
+      "viewDetails": "查看详情",
+      "selected": "当前显示",
+      "statuses": {
+        "ok": "已检查",
+        "render_failed": "渲染失败",
+        "timed_out": "超时"
+      },
+      "errors": {
+        "render_busy": "PDF 渲染器一直处于繁忙状态，请稍后重试。",
+        "render_timeout": "渲染超时。",
+        "render_error": "渲染失败。",
+        "analysis_error": "无法分析渲染出的 PDF。",
+        "budget_exhausted": "未检查：时间预算已用完。"
+      }
+    },
+    "preview": {
+      "title": "提取的文本（预览）",
+      "empty": "没有提取到文本。"
+    },
+    "errors": {
+      "title": "解析检查失败",
+      "busy": "另一项解析检查正在运行，请稍后重试。",
+      "retryIn": "{seconds} 秒后重试",
+      "timeout": "解析检查超时。请重试，或只检查一个模板。",
+      "too_large": "文件过大，上限为 4 MB。",
+      "invalid_file": "该文件不是可读取的 PDF、DOC 或 DOCX 文档。",
+      "not_found": "这份简历已不存在。",
+      "not_ready": "这份简历仍在处理中，请在处理完成后重试。",
+      "renderer_unavailable": "PDF 渲染器不可用或繁忙，请稍后重试。",
+      "server": "解析检查失败，请重试。",
+      "network": "无法连接服务器。请检查网络连接后重试。"
+    },
+    "upload": {
+      "cardTitle": "ATS 解析检查",
+      "cardDescription": "检查任意 PDF 或 DOCX",
+      "dialogTitle": "ATS 解析检查：上传文件",
+      "description": "上传任意 PDF 或 DOCX 简历，查看 ATS 类文本提取器能还原哪些内容。文件仅在内存中分析，不会被保存。",
+      "fileLabel": "简历文件（PDF 或 DOCX，最大 4 MB）",
+      "dropHint": "将文件拖到此处，或选择文件",
+      "chooseFile": "选择文件",
+      "selectedFile": "已选择：{name}（{size}）",
+      "invalidType": "请选择 PDF、DOCX 或 DOC 文件。",
+      "tooLarge": "文件超过 4 MB。",
+      "contentLanguage": "简历语言",
+      "autoDetect": "自动检测",
+      "languages": {
+        "en": "英语",
+        "es": "西班牙语",
+        "fr": "法语",
+        "pt": "葡萄牙语",
+        "de": "德语",
+        "ja": "日语",
+        "ko": "韩语",
+        "zh": "中文"
+      }
+    }
   }
 }

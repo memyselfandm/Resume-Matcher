@@ -1114,5 +1114,363 @@
       "skillGaps": "Brechas de habilidades",
       "talkingPoints": "Puntos clave"
     }
+  },
+  "atsParseCheck": {
+    "title": "Prueba de lectura ATS",
+    "intro": "Comprueba si un extractor de texto de tipo ATS puede leer el PDF de este currículum.",
+    "selfConsistency": "Prueba de autoconsistencia: mide si un extractor de texto recupera el propio contenido de tu currículum a partir del archivo. No es el veredicto de un ATS real ni evalúa la coincidencia de palabras clave.",
+    "show": "Mostrar prueba de lectura",
+    "hide": "Ocultar prueba de lectura",
+    "run": "Ejecutar prueba",
+    "rerun": "Volver a comprobar",
+    "cancel": "Cancelar prueba",
+    "running": "Comprobando…",
+    "runningAll": "Generando y comprobando las 7 plantillas…",
+    "elapsed": "{seconds} s",
+    "allTemplates": "Comprobar todas las plantillas",
+    "allTemplatesDescription": "Genera las 7 plantillas con tu configuración actual. Tarda más.",
+    "currentTemplate": "Plantilla: {template}",
+    "savedVersionNote": "Comprueba la última versión guardada de este currículum.",
+    "unsavedChangesNote": "Tienes cambios sin guardar. La prueba usa la última versión guardada.",
+    "masterResumeNote": "Comprueba tu currículum principal tal como se genera con tu configuración de plantilla guardada. Puedes comprobar un currículum adaptado desde el editor después de confirmarlo.",
+    "noResume": "Guarda o sube un currículum para ejecutar la prueba.",
+    "empty": "Ejecuta una prueba para ver cómo lee este currículum un extractor de tipo ATS.",
+    "scores": {
+      "parseability": "Legibilidad",
+      "parseabilityHint": "Extracción y diseño: ¿se puede leer el texto en orden?",
+      "content": "Contenido",
+      "contentHint": "Contacto, encabezados, fechas: ¿está el contenido esperado?",
+      "separateNote": "Dos puntuaciones independientes: un currículum bien legible pero escueto mantiene una legibilidad alta.",
+      "notAvailable": "N/D",
+      "outOf": "/100"
+    },
+    "extractability": {
+      "label": "Extracción de texto",
+      "full": "Completa",
+      "partial": "Parcial",
+      "none": "Ninguna",
+      "unsupported_format": "Formato no compatible"
+    },
+    "severity": {
+      "fatal": "Crítica",
+      "high": "Alta",
+      "medium": "Media",
+      "low": "Baja"
+    },
+    "status": {
+      "pass": "Correcto",
+      "fail": "Con problemas",
+      "not_applicable": "No aplica"
+    },
+    "category": {
+      "extraction": "Extracción",
+      "layout": "Diseño",
+      "content": "Contenido"
+    },
+    "issues": "Problemas ({count})",
+    "noIssues": "No se encontraron problemas.",
+    "passedChecks": "Comprobaciones superadas ({count})",
+    "notApplicableChecks": "No aplican ({count})",
+    "expectedByTemplate": "Esperado en esta plantilla",
+    "expectedByTemplateHint": "Esta plantilla es de dos columnas por diseño. La señal se muestra igualmente porque un ATS puede leer las columnas en otro orden.",
+    "twoColumn": "Dos columnas",
+    "checks": {
+      "file_format": {
+        "title": "Formato de archivo",
+        "fail": "Los archivos .doc antiguos no se analizan. Guarda el currículum como PDF o DOCX y vuelve a comprobarlo.",
+        "pass": "El formato de archivo es compatible."
+      },
+      "text_layer": {
+        "title": "Capa de texto",
+        "fail": "No se encontró texto seleccionable. Un ATS ve un currículum vacío; exporta un PDF basado en texto.",
+        "pass": "Se encontró texto seleccionable."
+      },
+      "truncated": {
+        "title": "Límites del análisis",
+        "fail": "Parte del documento no se analizó (límites: {page_limit} páginas, {char_limit} caracteres; páginas omitidas por densidad: {dense_pages}).",
+        "pass": "Se analizó todo el documento."
+      },
+      "unmapped_glyphs": {
+        "title": "Glifos sin mapear",
+        "fail": "Se extrajeron {count} caracteres como marcadores (cid:NN). La fuente no tiene correspondencia Unicode, así que un ATS lee texto ilegible.",
+        "pass": "Todos los caracteres se leen correctamente."
+      },
+      "icon_font_glyphs": {
+        "title": "Fuentes de iconos",
+        "fail": "Se extrajeron {count} caracteres de fuentes de iconos. Sustituye los iconos por etiquetas de texto.",
+        "pass": "No se extrajeron caracteres de fuentes de iconos."
+      },
+      "replacement_characters": {
+        "title": "Caracteres ilegibles",
+        "fail": "Se extrajeron {count} caracteres de reemplazo o de control ilegibles.",
+        "pass": "No se extrajeron caracteres ilegibles."
+      },
+      "text_as_image": {
+        "title": "Texto como imagen",
+        "fail": "Las páginas {pages} son casi todo imágenes con poco texto; ese contenido probablemente sea invisible para un ATS.",
+        "pass": "Ninguna página contiene texto convertido en imagen."
+      },
+      "multi_column": {
+        "title": "Columnas",
+        "fail": "Se detectó un diseño de varias columnas. Un ATS puede leer las columnas en otro orden.",
+        "pass": "Orden de lectura en una sola columna."
+      },
+      "sidebar": {
+        "title": "Barra lateral",
+        "fail": "Se detectó una barra lateral estrecha en las páginas {pages}. Su contenido suele mezclarse con el texto principal u omitirse.",
+        "pass": "No se detectó barra lateral."
+      },
+      "tables": {
+        "title": "Tablas",
+        "fail": "Se detectaron tablas. El contenido de las tablas suele omitirse o desordenarse.",
+        "pass": "No se detectaron tablas."
+      },
+      "images": {
+        "title": "Imágenes",
+        "fail": "Se detectaron imágenes. Un ATS no puede leer el texto dentro de imágenes.",
+        "pass": "No se detectaron imágenes."
+      },
+      "text_boxes": {
+        "title": "Cuadros de texto",
+        "fail": "Los cuadros de texto contienen {chars} caracteres que muchos ATS omiten.",
+        "pass": "No se detectaron cuadros de texto."
+      },
+      "header_footer_contact": {
+        "title": "Contacto en encabezado o pie",
+        "fail": "Los datos de contacto ({fields}) solo aparecen en el encabezado o pie de página, que muchos ATS ignoran.",
+        "pass": "Los datos de contacto están en el cuerpo del documento."
+      },
+      "page_count": {
+        "title": "Número de páginas",
+        "fail": "El currículum tiene {pages} páginas; la mayoría de los sistemas prefieren {max_pages} o menos.",
+        "pass": "El número de páginas está dentro del rango recomendado."
+      },
+      "contact_email": {
+        "title": "Correo electrónico",
+        "fail": "No se encontró ninguna dirección de correo en el texto extraído.",
+        "pass": "Se encontró la dirección de correo."
+      },
+      "contact_phone": {
+        "title": "Teléfono",
+        "fail": "No se encontró ningún número de teléfono en el texto extraído.",
+        "pass": "Se encontró el número de teléfono."
+      },
+      "contact_linkedin": {
+        "title": "LinkedIn",
+        "fail": "No se encontró ninguna URL de perfil de LinkedIn en el texto extraído.",
+        "pass": "Se encontró el perfil de LinkedIn."
+      },
+      "section_headings": {
+        "title": "Encabezados de sección",
+        "fail": "No se encontraron encabezados de sección estándar: {missing}.",
+        "pass": "Se encontraron los encabezados de sección estándar."
+      },
+      "dates_present": {
+        "title": "Fechas",
+        "fail": "Solo se encontraron {count} menciones de años; añade fechas a cada puesto.",
+        "pass": "Se encontraron fechas."
+      },
+      "month_year_dates": {
+        "title": "Mes y año",
+        "fail": "Las fechas no incluyen el mes; usa formatos como 'Jan 2021' o '01/2021'.",
+        "pass": "Las fechas incluyen el mes."
+      },
+      "action_verbs": {
+        "title": "Verbos de acción",
+        "fail": "Se encontraron {count} verbos de acción distintos; intenta llegar a {min_count} o más.",
+        "pass": "Las viñetas usan verbos de acción variados."
+      },
+      "quantification": {
+        "title": "Resultados medibles",
+        "fail": "{count} líneas contienen resultados medibles; intenta llegar a {min_count} o más.",
+        "pass": "Los resultados están cuantificados."
+      },
+      "length": {
+        "title": "Extensión",
+        "fail": "El currículum tiene {words} palabras ({verdict}); lo ideal es entre {min_words} y {max_words}.",
+        "pass": "La extensión está dentro del rango recomendado."
+      }
+    },
+    "notApplicable": {
+      "no_text": "No comprobado: no se extrajo texto.",
+      "content_language": "No comprobado: esta prueba solo se aplica a algunos idiomas de currículum.",
+      "docx": "No se comprueba en archivos DOCX.",
+      "pdf": "Solo se aplica a archivos DOCX.",
+      "doc": "No se comprueba en archivos .doc.",
+      "covered_by_multi_column": "Cubierto por la prueba de columnas.",
+      "dense_pages": "No comprobado: se omitieron páginas por ser demasiado densas.",
+      "default": "No aplica."
+    },
+    "params": {
+      "none": "ninguna",
+      "listSeparator": ", ",
+      "sections": {
+        "experience": "Experiencia",
+        "education": "Formación",
+        "skills": "Habilidades"
+      },
+      "contactFields": {
+        "email": "correo",
+        "phone": "teléfono"
+      },
+      "verdict": {
+        "short": "demasiado corto",
+        "long": "demasiado largo",
+        "ok": "dentro del rango"
+      }
+    },
+    "roundtrip": {
+      "title": "Ida y vuelta",
+      "recall": "Recuperación de contenido",
+      "recallHint": "Proporción de los campos generados de tu currículum que aparecen en el texto extraído.",
+      "fidelity": "Fidelidad del orden",
+      "fidelityHint": "Cuánto se parece el orden extraído al orden generado.",
+      "truncated": "Solo se compararon los primeros 1.000 campos.",
+      "problemFields": "Campos ausentes o alterados ({count})",
+      "allFound": "Se recuperaron todos los campos generados.",
+      "notRenderedCount": "{count} campos no se imprimen en esta plantilla o están ocultos; no cuentan para la recuperación.",
+      "entryField": "{section} {index}: {field}",
+      "headingField": "Encabezado: {section}",
+      "fieldStatus": {
+        "found": "Encontrado",
+        "garbled": "Alterado",
+        "missing": "Ausente",
+        "not_rendered": "No impreso",
+        "hidden": "Oculto"
+      }
+    },
+    "sections": {
+      "summary": "Resumen",
+      "workExperience": "Experiencia",
+      "education": "Formación",
+      "personalProjects": "Proyecto",
+      "additional": "Habilidades y premios",
+      "custom": "Sección personalizada"
+    },
+    "fields": {
+      "personalInfo": {
+        "name": "Nombre",
+        "title": "Puesto",
+        "email": "Correo electrónico",
+        "phone": "Teléfono",
+        "location": "Ubicación",
+        "website": "Sitio web",
+        "linkedin": "LinkedIn",
+        "github": "GitHub"
+      },
+      "summary": "Resumen",
+      "heading": "Encabezado de sección",
+      "workExperience": {
+        "title": "Puesto",
+        "company": "Empresa",
+        "location": "Ubicación",
+        "years": "Fechas",
+        "description": "Viñeta"
+      },
+      "education": {
+        "degree": "Titulación",
+        "institution": "Institución",
+        "years": "Fechas",
+        "description": "Viñeta"
+      },
+      "personalProjects": {
+        "name": "Nombre del proyecto",
+        "role": "Función",
+        "years": "Fechas",
+        "description": "Viñeta"
+      },
+      "additional": {
+        "heading": "Encabezado de habilidades y premios",
+        "technicalSkills": "Habilidad",
+        "languages": "Idioma",
+        "certificationsTraining": "Certificación",
+        "awards": "Premio"
+      },
+      "customSections": {
+        "title": "Título",
+        "subtitle": "Subtítulo",
+        "location": "Ubicación",
+        "years": "Fechas",
+        "description": "Viñeta",
+        "strings": "Elemento",
+        "text": "Texto"
+      }
+    },
+    "profiles": {
+      "title": "Perfiles ATS heurísticos",
+      "disclaimer": "Aproximaciones: estas pruebas reponderadas según la exigencia de lectura atribuida a cada sistema. No verificadas por los fabricantes.",
+      "passes": "Probablemente legible",
+      "atRisk": "En riesgo",
+      "names": {
+        "workday": "Workday",
+        "taleo": "Taleo",
+        "successfactors": "SuccessFactors",
+        "icims": "iCIMS",
+        "greenhouse": "Greenhouse",
+        "lever": "Lever"
+      }
+    },
+    "templates": {
+      "title": "Todas las plantillas",
+      "caption": "Resultados de la prueba de lectura por plantilla con tu configuración actual",
+      "template": "Plantilla",
+      "status": "Estado",
+      "details": "Detalles",
+      "viewDetails": "Ver detalles",
+      "selected": "Mostrando",
+      "statuses": {
+        "ok": "Comprobada",
+        "render_failed": "Error al generar",
+        "timed_out": "Tiempo agotado"
+      },
+      "errors": {
+        "render_busy": "El generador de PDF siguió ocupado. Inténtalo de nuevo en breve.",
+        "render_timeout": "Se agotó el tiempo de generación.",
+        "render_error": "No se pudo generar.",
+        "analysis_error": "No se pudo analizar el PDF generado.",
+        "budget_exhausted": "No comprobada: se agotó el tiempo disponible."
+      }
+    },
+    "preview": {
+      "title": "Texto extraído (vista previa)",
+      "empty": "No se extrajo texto."
+    },
+    "errors": {
+      "title": "La prueba de lectura falló",
+      "busy": "Ya hay otra prueba de lectura en curso. Inténtalo de nuevo en breve.",
+      "retryIn": "Reintentar en {seconds} s",
+      "timeout": "Se agotó el tiempo de la prueba. Inténtalo de nuevo o comprueba una sola plantilla.",
+      "too_large": "El archivo es demasiado grande. El límite es de 4 MB.",
+      "invalid_file": "El archivo no es un documento PDF, DOC o DOCX legible.",
+      "not_found": "Este currículum ya no existe.",
+      "not_ready": "Este currículum aún se está procesando. Inténtalo de nuevo cuando termine.",
+      "renderer_unavailable": "El generador de PDF no está disponible o está ocupado. Inténtalo de nuevo en breve.",
+      "server": "La prueba de lectura falló. Inténtalo de nuevo.",
+      "network": "No se pudo conectar con el servidor. Revisa tu conexión e inténtalo de nuevo."
+    },
+    "upload": {
+      "cardTitle": "Prueba de lectura ATS",
+      "cardDescription": "Comprueba cualquier PDF o DOCX",
+      "dialogTitle": "Prueba de lectura ATS: sube un archivo",
+      "description": "Sube cualquier currículum en PDF o DOCX para ver qué recupera un extractor de texto de tipo ATS. El archivo se analiza en memoria y nunca se guarda.",
+      "fileLabel": "Archivo del currículum (PDF o DOCX, máx. 4 MB)",
+      "dropHint": "Suelta un archivo aquí o elige uno",
+      "chooseFile": "Elegir archivo",
+      "selectedFile": "Seleccionado: {name} ({size})",
+      "invalidType": "Elige un archivo PDF, DOCX o DOC.",
+      "tooLarge": "El archivo supera los 4 MB.",
+      "contentLanguage": "Idioma del currículum",
+      "autoDetect": "Detectar automáticamente",
+      "languages": {
+        "en": "Inglés",
+        "es": "Español",
+        "fr": "Francés",
+        "pt": "Portugués",
+        "de": "Alemán",
+        "ja": "Japonés",
+        "ko": "Coreano",
+        "zh": "Chino"
+      }
+    }
   }
 }

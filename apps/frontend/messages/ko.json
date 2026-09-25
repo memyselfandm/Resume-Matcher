@@ -1114,5 +1114,363 @@
       "skillGaps": "역량 격차",
       "talkingPoints": "핵심 포인트"
     }
+  },
+  "atsParseCheck": {
+    "title": "ATS 파싱 검사",
+    "intro": "ATS 방식의 텍스트 추출기가 이 이력서의 PDF를 읽을 수 있는지 확인합니다.",
+    "selfConsistency": "자기 일관성 검사: 텍스트 추출기가 파일에서 이력서 자체의 내용을 복원하는지 측정합니다. 실제 ATS의 판정이 아니며 키워드 적합도도 평가하지 않습니다.",
+    "show": "파싱 검사 표시",
+    "hide": "파싱 검사 숨기기",
+    "run": "검사 실행",
+    "rerun": "다시 검사",
+    "cancel": "검사 취소",
+    "running": "검사 중…",
+    "runningAll": "템플릿 7개를 모두 생성하고 검사하는 중…",
+    "elapsed": "{seconds}초",
+    "allTemplates": "모든 템플릿 검사",
+    "allTemplatesDescription": "현재 설정으로 템플릿 7개를 모두 생성합니다. 시간이 더 걸립니다.",
+    "currentTemplate": "템플릿: {template}",
+    "savedVersionNote": "이 이력서의 마지막으로 저장된 버전을 검사합니다.",
+    "unsavedChangesNote": "저장하지 않은 변경 사항이 있습니다. 검사는 마지막으로 저장된 버전을 사용합니다.",
+    "masterResumeNote": "저장된 템플릿 설정으로 생성한 마스터 이력서를 검사합니다. 맞춤 이력서는 확정한 뒤 편집기에서 검사할 수 있습니다.",
+    "noResume": "검사를 실행하려면 이력서를 저장하거나 업로드하세요.",
+    "empty": "검사를 실행하면 ATS 방식의 추출기가 이 이력서를 어떻게 읽는지 확인할 수 있습니다.",
+    "scores": {
+      "parseability": "파싱 용이성",
+      "parseabilityHint": "추출과 레이아웃: 텍스트를 올바른 순서로 읽을 수 있나요?",
+      "content": "내용",
+      "contentHint": "연락처, 제목, 날짜: 필요한 내용이 있나요?",
+      "separateNote": "두 점수는 별개입니다. 잘 파싱되지만 내용이 적은 이력서도 파싱 용이성 점수는 높게 유지됩니다.",
+      "notAvailable": "해당 없음",
+      "outOf": "/100"
+    },
+    "extractability": {
+      "label": "텍스트 추출",
+      "full": "전체",
+      "partial": "일부",
+      "none": "없음",
+      "unsupported_format": "지원하지 않는 형식"
+    },
+    "severity": {
+      "fatal": "치명적",
+      "high": "높음",
+      "medium": "보통",
+      "low": "낮음"
+    },
+    "status": {
+      "pass": "통과",
+      "fail": "문제 있음",
+      "not_applicable": "해당 없음"
+    },
+    "category": {
+      "extraction": "추출",
+      "layout": "레이아웃",
+      "content": "내용"
+    },
+    "issues": "문제 ({count}개)",
+    "noIssues": "발견된 문제가 없습니다.",
+    "passedChecks": "통과한 검사 ({count}개)",
+    "notApplicableChecks": "해당 없음 ({count}개)",
+    "expectedByTemplate": "이 템플릿에서는 예상된 결과",
+    "expectedByTemplateHint": "이 템플릿은 2단 구성으로 디자인되었습니다. ATS가 단을 잘못된 순서로 읽을 수 있으므로 이 신호도 표시합니다.",
+    "twoColumn": "2단",
+    "checks": {
+      "file_format": {
+        "title": "파일 형식",
+        "fail": "구형 .doc 파일은 분석하지 않습니다. 이력서를 PDF 또는 DOCX로 저장한 뒤 다시 검사하세요.",
+        "pass": "지원되는 파일 형식입니다."
+      },
+      "text_layer": {
+        "title": "텍스트 레이어",
+        "fail": "선택 가능한 텍스트가 없습니다. ATS에는 빈 이력서로 보입니다. 텍스트 기반 PDF로 내보내세요.",
+        "pass": "선택 가능한 텍스트가 있습니다."
+      },
+      "truncated": {
+        "title": "분석 한도",
+        "fail": "문서 일부가 분석되지 않았습니다(한도: {page_limit}페이지, {char_limit}자, 밀도가 너무 높아 건너뛴 페이지: {dense_pages}).",
+        "pass": "문서 전체를 분석했습니다."
+      },
+      "unmapped_glyphs": {
+        "title": "매핑되지 않은 글리프",
+        "fail": "{count}개의 문자가 (cid:NN) 자리 표시자로 추출되었습니다. 글꼴에 유니코드 매핑이 없어 ATS에는 알아볼 수 없는 텍스트로 읽힙니다.",
+        "pass": "모든 문자가 읽을 수 있는 텍스트에 매핑됩니다."
+      },
+      "icon_font_glyphs": {
+        "title": "아이콘 글꼴",
+        "fail": "아이콘 글꼴 문자 {count}개가 추출되었습니다. 아이콘을 텍스트 레이블로 바꾸세요.",
+        "pass": "아이콘 글꼴 문자가 추출되지 않았습니다."
+      },
+      "replacement_characters": {
+        "title": "읽을 수 없는 문자",
+        "fail": "읽을 수 없는 대체 문자 또는 제어 문자 {count}개가 추출되었습니다.",
+        "pass": "읽을 수 없는 문자가 추출되지 않았습니다."
+      },
+      "text_as_image": {
+        "title": "이미지로 된 텍스트",
+        "fail": "{pages} 페이지는 대부분 이미지이고 텍스트가 거의 없습니다. 해당 내용은 ATS에 보이지 않을 가능성이 큽니다.",
+        "pass": "텍스트가 이미지로 된 페이지가 없습니다."
+      },
+      "multi_column": {
+        "title": "단 구성",
+        "fail": "다단 레이아웃이 감지되었습니다. ATS가 단을 잘못된 순서로 읽을 수 있습니다.",
+        "pass": "1단 읽기 순서입니다."
+      },
+      "sidebar": {
+        "title": "사이드바",
+        "fail": "{pages} 페이지에서 좁은 사이드바가 감지되었습니다. 사이드바 내용은 본문과 섞이거나 누락되는 경우가 많습니다.",
+        "pass": "사이드바가 감지되지 않았습니다."
+      },
+      "tables": {
+        "title": "표",
+        "fail": "표가 감지되었습니다. 표 안의 내용은 누락되거나 순서가 뒤섞이는 경우가 많습니다.",
+        "pass": "표가 감지되지 않았습니다."
+      },
+      "images": {
+        "title": "이미지",
+        "fail": "이미지가 감지되었습니다. ATS는 이미지 안의 텍스트를 읽을 수 없습니다.",
+        "pass": "이미지가 감지되지 않았습니다."
+      },
+      "text_boxes": {
+        "title": "텍스트 상자",
+        "fail": "텍스트 상자에 {chars}자가 있으며, 많은 ATS가 이를 건너뜁니다.",
+        "pass": "텍스트 상자가 감지되지 않았습니다."
+      },
+      "header_footer_contact": {
+        "title": "머리글·바닥글의 연락처",
+        "fail": "연락처({fields})가 머리글이나 바닥글에만 있습니다. 많은 ATS가 이 영역을 무시합니다.",
+        "pass": "연락처가 본문에 있습니다."
+      },
+      "page_count": {
+        "title": "페이지 수",
+        "fail": "이력서가 {pages}페이지입니다. 대부분의 시스템은 {max_pages}페이지 이하를 선호합니다.",
+        "pass": "페이지 수가 권장 범위 안에 있습니다."
+      },
+      "contact_email": {
+        "title": "이메일",
+        "fail": "추출된 텍스트에서 이메일 주소를 찾지 못했습니다.",
+        "pass": "이메일 주소를 찾았습니다."
+      },
+      "contact_phone": {
+        "title": "전화번호",
+        "fail": "추출된 텍스트에서 전화번호를 찾지 못했습니다.",
+        "pass": "전화번호를 찾았습니다."
+      },
+      "contact_linkedin": {
+        "title": "LinkedIn",
+        "fail": "추출된 텍스트에서 LinkedIn 프로필 URL을 찾지 못했습니다.",
+        "pass": "LinkedIn 프로필을 찾았습니다."
+      },
+      "section_headings": {
+        "title": "섹션 제목",
+        "fail": "표준 섹션 제목을 찾지 못했습니다: {missing}.",
+        "pass": "표준 섹션 제목을 찾았습니다."
+      },
+      "dates_present": {
+        "title": "날짜",
+        "fail": "연도 표기가 {count}개뿐입니다. 각 경력에 날짜를 추가하세요.",
+        "pass": "날짜를 찾았습니다."
+      },
+      "month_year_dates": {
+        "title": "연월",
+        "fail": "날짜에 월이 없습니다. 'Jan 2021'이나 '01/2021' 같은 형식을 사용하세요.",
+        "pass": "날짜에 월이 포함되어 있습니다."
+      },
+      "action_verbs": {
+        "title": "행동 동사",
+        "fail": "서로 다른 행동 동사가 {count}개 있습니다. {min_count}개 이상을 목표로 하세요.",
+        "pass": "글머리 기호 항목에 다양한 행동 동사가 쓰였습니다."
+      },
+      "quantification": {
+        "title": "측정 가능한 성과",
+        "fail": "측정 가능한 성과가 담긴 줄이 {count}개입니다. {min_count}개 이상을 목표로 하세요.",
+        "pass": "성과가 수치로 표현되어 있습니다."
+      },
+      "length": {
+        "title": "분량",
+        "fail": "이력서가 {words}단어입니다({verdict}). {min_words}~{max_words}단어를 목표로 하세요.",
+        "pass": "분량이 권장 범위 안에 있습니다."
+      }
+    },
+    "notApplicable": {
+      "no_text": "검사하지 않음: 추출된 텍스트가 없습니다.",
+      "content_language": "검사하지 않음: 이 검사는 일부 이력서 언어에만 적용됩니다.",
+      "docx": "DOCX 파일에서는 검사하지 않습니다.",
+      "pdf": "DOCX 파일에만 적용됩니다.",
+      "doc": ".doc 파일에서는 검사하지 않습니다.",
+      "covered_by_multi_column": "단 구성 검사에 포함됩니다.",
+      "dense_pages": "검사하지 않음: 밀도가 너무 높은 페이지를 건너뛰었습니다.",
+      "default": "해당 없음."
+    },
+    "params": {
+      "none": "없음",
+      "listSeparator": ", ",
+      "sections": {
+        "experience": "경력",
+        "education": "학력",
+        "skills": "기술"
+      },
+      "contactFields": {
+        "email": "이메일",
+        "phone": "전화번호"
+      },
+      "verdict": {
+        "short": "너무 짧음",
+        "long": "너무 김",
+        "ok": "범위 안"
+      }
+    },
+    "roundtrip": {
+      "title": "왕복 검사",
+      "recall": "내용 재현율",
+      "recallHint": "이력서에서 출력된 필드 중 추출된 텍스트에서 찾은 비율입니다.",
+      "fidelity": "순서 충실도",
+      "fidelityHint": "추출된 순서가 출력된 순서를 얼마나 잘 따르는지 나타냅니다.",
+      "truncated": "처음 1,000개 필드만 비교했습니다.",
+      "problemFields": "누락되거나 깨진 필드 ({count}개)",
+      "allFound": "출력된 모든 필드를 복원했습니다.",
+      "notRenderedCount": "{count}개 필드는 이 템플릿에서 출력되지 않거나 숨겨져 있어 재현율에 포함되지 않습니다.",
+      "entryField": "{section} {index}: {field}",
+      "headingField": "제목: {section}",
+      "fieldStatus": {
+        "found": "찾음",
+        "garbled": "깨짐",
+        "missing": "누락",
+        "not_rendered": "출력 안 됨",
+        "hidden": "숨김"
+      }
+    },
+    "sections": {
+      "summary": "요약",
+      "workExperience": "경력",
+      "education": "학력",
+      "personalProjects": "프로젝트",
+      "additional": "기술 및 수상",
+      "custom": "사용자 지정 섹션"
+    },
+    "fields": {
+      "personalInfo": {
+        "name": "이름",
+        "title": "직함",
+        "email": "이메일",
+        "phone": "전화번호",
+        "location": "위치",
+        "website": "웹사이트",
+        "linkedin": "LinkedIn",
+        "github": "GitHub"
+      },
+      "summary": "요약",
+      "heading": "섹션 제목",
+      "workExperience": {
+        "title": "직함",
+        "company": "회사",
+        "location": "위치",
+        "years": "기간",
+        "description": "글머리 항목"
+      },
+      "education": {
+        "degree": "학위",
+        "institution": "교육 기관",
+        "years": "기간",
+        "description": "글머리 항목"
+      },
+      "personalProjects": {
+        "name": "프로젝트 이름",
+        "role": "역할",
+        "years": "기간",
+        "description": "글머리 항목"
+      },
+      "additional": {
+        "heading": "기술 및 수상 제목",
+        "technicalSkills": "기술",
+        "languages": "언어",
+        "certificationsTraining": "자격증",
+        "awards": "수상"
+      },
+      "customSections": {
+        "title": "제목",
+        "subtitle": "부제목",
+        "location": "위치",
+        "years": "기간",
+        "description": "글머리 항목",
+        "strings": "항목",
+        "text": "텍스트"
+      }
+    },
+    "profiles": {
+      "title": "휴리스틱 ATS 프로필",
+      "disclaimer": "근사치입니다. 각 시스템에 알려진 파싱 엄격도로 이 검사들의 가중치를 다시 매긴 것이며, 공급업체의 검증을 받지 않았습니다.",
+      "passes": "파싱 가능성 높음",
+      "atRisk": "주의 필요",
+      "names": {
+        "workday": "Workday",
+        "taleo": "Taleo",
+        "successfactors": "SuccessFactors",
+        "icims": "iCIMS",
+        "greenhouse": "Greenhouse",
+        "lever": "Lever"
+      }
+    },
+    "templates": {
+      "title": "모든 템플릿",
+      "caption": "현재 설정으로 수행한 템플릿별 파싱 검사 결과",
+      "template": "템플릿",
+      "status": "상태",
+      "details": "세부 정보",
+      "viewDetails": "세부 정보 보기",
+      "selected": "표시 중",
+      "statuses": {
+        "ok": "검사 완료",
+        "render_failed": "생성 실패",
+        "timed_out": "시간 초과"
+      },
+      "errors": {
+        "render_busy": "PDF 생성기가 계속 사용 중이었습니다. 잠시 후 다시 시도하세요.",
+        "render_timeout": "생성 시간이 초과되었습니다.",
+        "render_error": "생성에 실패했습니다.",
+        "analysis_error": "생성된 PDF를 분석할 수 없습니다.",
+        "budget_exhausted": "검사하지 않음: 제한 시간이 모두 소진되었습니다."
+      }
+    },
+    "preview": {
+      "title": "추출된 텍스트(미리 보기)",
+      "empty": "추출된 텍스트가 없습니다."
+    },
+    "errors": {
+      "title": "파싱 검사 실패",
+      "busy": "다른 파싱 검사가 진행 중입니다. 잠시 후 다시 시도하세요.",
+      "retryIn": "{seconds}초 후 다시 시도",
+      "timeout": "검사 시간이 초과되었습니다. 다시 시도하거나 템플릿 하나만 검사하세요.",
+      "too_large": "파일이 너무 큽니다. 최대 4MB까지 가능합니다.",
+      "invalid_file": "읽을 수 있는 PDF, DOC, DOCX 문서가 아닙니다.",
+      "not_found": "이 이력서는 더 이상 존재하지 않습니다.",
+      "not_ready": "이 이력서는 아직 처리 중입니다. 처리가 끝난 뒤 다시 시도하세요.",
+      "renderer_unavailable": "PDF 생성기를 사용할 수 없거나 사용 중입니다. 잠시 후 다시 시도하세요.",
+      "server": "파싱 검사에 실패했습니다. 다시 시도하세요.",
+      "network": "서버에 연결할 수 없습니다. 연결 상태를 확인하고 다시 시도하세요."
+    },
+    "upload": {
+      "cardTitle": "ATS 파싱 검사",
+      "cardDescription": "PDF·DOCX 파일 검사",
+      "dialogTitle": "ATS 파싱 검사: 파일 업로드",
+      "description": "PDF 또는 DOCX 이력서를 업로드하면 ATS 방식의 텍스트 추출기가 무엇을 복원하는지 확인할 수 있습니다. 파일은 메모리에서 분석되며 저장되지 않습니다.",
+      "fileLabel": "이력서 파일(PDF 또는 DOCX, 최대 4MB)",
+      "dropHint": "여기에 파일을 끌어다 놓거나 선택하세요",
+      "chooseFile": "파일 선택",
+      "selectedFile": "선택됨: {name} ({size})",
+      "invalidType": "PDF, DOCX 또는 DOC 파일을 선택하세요.",
+      "tooLarge": "파일이 4MB를 초과합니다.",
+      "contentLanguage": "이력서 언어",
+      "autoDetect": "자동 감지",
+      "languages": {
+        "en": "영어",
+        "es": "스페인어",
+        "fr": "프랑스어",
+        "pt": "포르투갈어",
+        "de": "독일어",
+        "ja": "일본어",
+        "ko": "한국어",
+        "zh": "중국어"
+      }
+    }
   }
 }

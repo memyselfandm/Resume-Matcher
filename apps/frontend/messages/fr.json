@@ -1114,5 +1114,363 @@
       "skillGaps": "Écarts de compétences",
       "talkingPoints": "Arguments clés"
     }
+  },
+  "atsParseCheck": {
+    "title": "Test de lecture ATS",
+    "intro": "Vérifie si un extracteur de texte de type ATS peut lire le PDF de ce CV.",
+    "selfConsistency": "Test d'auto-cohérence : il mesure si un extracteur de texte retrouve le contenu de votre propre CV à partir du fichier. Ce n'est pas le verdict d'un véritable ATS et il n'évalue pas la correspondance des mots-clés.",
+    "show": "Afficher le test de lecture",
+    "hide": "Masquer le test de lecture",
+    "run": "Lancer le test",
+    "rerun": "Relancer le test",
+    "cancel": "Annuler le test",
+    "running": "Vérification…",
+    "runningAll": "Génération et vérification des 7 modèles…",
+    "elapsed": "{seconds} s",
+    "allTemplates": "Tester tous les modèles",
+    "allTemplatesDescription": "Génère les 7 modèles avec vos paramètres actuels. Plus long.",
+    "currentTemplate": "Modèle : {template}",
+    "savedVersionNote": "Teste la dernière version enregistrée de ce CV.",
+    "unsavedChangesNote": "Vous avez des modifications non enregistrées. Le test utilise la dernière version enregistrée.",
+    "masterResumeNote": "Teste votre CV principal tel qu'il est généré avec vos paramètres de modèle enregistrés. Vous pourrez tester un CV adapté depuis l'éditeur après l'avoir confirmé.",
+    "noResume": "Enregistrez ou importez un CV pour lancer le test.",
+    "empty": "Lancez un test pour voir comment un extracteur de type ATS lit ce CV.",
+    "scores": {
+      "parseability": "Lisibilité",
+      "parseabilityHint": "Extraction et mise en page : le texte peut-il être lu dans l'ordre ?",
+      "content": "Contenu",
+      "contentHint": "Coordonnées, titres, dates : le contenu attendu est-il présent ?",
+      "separateNote": "Deux scores distincts : un CV bien lisible mais peu fourni garde un score de lisibilité élevé.",
+      "notAvailable": "N/D",
+      "outOf": "/100"
+    },
+    "extractability": {
+      "label": "Extraction du texte",
+      "full": "Complète",
+      "partial": "Partielle",
+      "none": "Aucune",
+      "unsupported_format": "Format non pris en charge"
+    },
+    "severity": {
+      "fatal": "Critique",
+      "high": "Élevée",
+      "medium": "Moyenne",
+      "low": "Faible"
+    },
+    "status": {
+      "pass": "Réussi",
+      "fail": "Échec",
+      "not_applicable": "Non applicable"
+    },
+    "category": {
+      "extraction": "Extraction",
+      "layout": "Mise en page",
+      "content": "Contenu"
+    },
+    "issues": "Problèmes ({count})",
+    "noIssues": "Aucun problème détecté.",
+    "passedChecks": "Vérifications réussies ({count})",
+    "notApplicableChecks": "Non applicables ({count})",
+    "expectedByTemplate": "Attendu pour ce modèle",
+    "expectedByTemplateHint": "Ce modèle est conçu sur deux colonnes. Le signal reste affiché, car un ATS peut lire les colonnes dans le désordre.",
+    "twoColumn": "Deux colonnes",
+    "checks": {
+      "file_format": {
+        "title": "Format de fichier",
+        "fail": "Les anciens fichiers .doc ne sont pas analysés. Enregistrez le CV en PDF ou DOCX et relancez le test.",
+        "pass": "Le format de fichier est pris en charge."
+      },
+      "text_layer": {
+        "title": "Couche de texte",
+        "fail": "Aucun texte sélectionnable n'a été trouvé. Un ATS voit un CV vide ; exportez un PDF contenant du texte.",
+        "pass": "Du texte sélectionnable a été trouvé."
+      },
+      "truncated": {
+        "title": "Limites d'analyse",
+        "fail": "Une partie du document n'a pas été analysée (limites : {page_limit} pages, {char_limit} caractères ; pages ignorées car trop denses : {dense_pages}).",
+        "pass": "Tout le document a été analysé."
+      },
+      "unmapped_glyphs": {
+        "title": "Glyphes non mappés",
+        "fail": "{count} caractères ont été extraits sous forme de marqueurs (cid:NN). La police n'a pas de correspondance Unicode : un ATS lit du texte illisible.",
+        "pass": "Tous les caractères correspondent à du texte lisible."
+      },
+      "icon_font_glyphs": {
+        "title": "Polices d'icônes",
+        "fail": "{count} caractères de police d'icônes ont été extraits. Remplacez les icônes par des libellés en texte.",
+        "pass": "Aucun caractère de police d'icônes n'a été extrait."
+      },
+      "replacement_characters": {
+        "title": "Caractères illisibles",
+        "fail": "{count} caractères de remplacement ou de contrôle illisibles ont été extraits.",
+        "pass": "Aucun caractère illisible n'a été extrait."
+      },
+      "text_as_image": {
+        "title": "Texte en image",
+        "fail": "Les pages {pages} sont surtout des images avec peu de texte ; ce contenu est probablement invisible pour un ATS.",
+        "pass": "Aucune page ne contient de texte en image."
+      },
+      "multi_column": {
+        "title": "Colonnes",
+        "fail": "Mise en page multicolonne détectée. Un ATS peut lire les colonnes dans le désordre.",
+        "pass": "Ordre de lecture sur une seule colonne."
+      },
+      "sidebar": {
+        "title": "Barre latérale",
+        "fail": "Barre latérale étroite détectée sur les pages {pages}. Son contenu est souvent fusionné avec le texte principal ou ignoré.",
+        "pass": "Aucune barre latérale détectée."
+      },
+      "tables": {
+        "title": "Tableaux",
+        "fail": "Tableaux détectés. Le contenu des tableaux est souvent ignoré ou mélangé.",
+        "pass": "Aucun tableau détecté."
+      },
+      "images": {
+        "title": "Images",
+        "fail": "Images détectées. Un ATS ne peut pas lire le texte contenu dans des images.",
+        "pass": "Aucune image détectée."
+      },
+      "text_boxes": {
+        "title": "Zones de texte",
+        "fail": "Les zones de texte contiennent {chars} caractères que de nombreux ATS ignorent.",
+        "pass": "Aucune zone de texte détectée."
+      },
+      "header_footer_contact": {
+        "title": "Coordonnées en en-tête ou pied de page",
+        "fail": "Les coordonnées ({fields}) n'apparaissent que dans l'en-tête ou le pied de page, que de nombreux ATS ignorent.",
+        "pass": "Les coordonnées figurent dans le corps du document."
+      },
+      "page_count": {
+        "title": "Nombre de pages",
+        "fail": "Le CV compte {pages} pages ; la plupart des systèmes en préfèrent {max_pages} ou moins.",
+        "pass": "Le nombre de pages est dans la plage recommandée."
+      },
+      "contact_email": {
+        "title": "E-mail",
+        "fail": "Aucune adresse e-mail n'a été trouvée dans le texte extrait.",
+        "pass": "Adresse e-mail trouvée."
+      },
+      "contact_phone": {
+        "title": "Téléphone",
+        "fail": "Aucun numéro de téléphone n'a été trouvé dans le texte extrait.",
+        "pass": "Numéro de téléphone trouvé."
+      },
+      "contact_linkedin": {
+        "title": "LinkedIn",
+        "fail": "Aucune URL de profil LinkedIn n'a été trouvée dans le texte extrait.",
+        "pass": "Profil LinkedIn trouvé."
+      },
+      "section_headings": {
+        "title": "Titres de section",
+        "fail": "Titres de section standard introuvables : {missing}.",
+        "pass": "Titres de section standard trouvés."
+      },
+      "dates_present": {
+        "title": "Dates",
+        "fail": "Seulement {count} mentions d'années trouvées ; ajoutez des dates à chaque poste.",
+        "pass": "Dates trouvées."
+      },
+      "month_year_dates": {
+        "title": "Mois et année",
+        "fail": "Les dates n'indiquent pas le mois ; utilisez des formats comme 'Jan 2021' ou '01/2021'.",
+        "pass": "Les dates indiquent le mois."
+      },
+      "action_verbs": {
+        "title": "Verbes d'action",
+        "fail": "{count} verbes d'action différents trouvés ; visez {min_count} ou plus.",
+        "pass": "Les puces utilisent des verbes d'action variés."
+      },
+      "quantification": {
+        "title": "Résultats mesurables",
+        "fail": "{count} lignes contiennent des résultats mesurables ; visez {min_count} ou plus.",
+        "pass": "Les résultats sont chiffrés."
+      },
+      "length": {
+        "title": "Longueur",
+        "fail": "Le CV compte {words} mots ({verdict}) ; visez entre {min_words} et {max_words}.",
+        "pass": "La longueur est dans la plage recommandée."
+      }
+    },
+    "notApplicable": {
+      "no_text": "Non vérifié : aucun texte n'a été extrait.",
+      "content_language": "Non vérifié : ce test ne s'applique qu'à certaines langues de CV.",
+      "docx": "Non vérifié pour les fichiers DOCX.",
+      "pdf": "S'applique uniquement aux fichiers DOCX.",
+      "doc": "Non vérifié pour les fichiers .doc.",
+      "covered_by_multi_column": "Couvert par le test des colonnes.",
+      "dense_pages": "Non vérifié : des pages ont été ignorées car trop denses.",
+      "default": "Non applicable."
+    },
+    "params": {
+      "none": "aucune",
+      "listSeparator": ", ",
+      "sections": {
+        "experience": "Expérience",
+        "education": "Formation",
+        "skills": "Compétences"
+      },
+      "contactFields": {
+        "email": "e-mail",
+        "phone": "téléphone"
+      },
+      "verdict": {
+        "short": "trop court",
+        "long": "trop long",
+        "ok": "dans la plage"
+      }
+    },
+    "roundtrip": {
+      "title": "Aller-retour",
+      "recall": "Rappel du contenu",
+      "recallHint": "Part des champs générés de votre CV retrouvés dans le texte extrait.",
+      "fidelity": "Fidélité de l'ordre",
+      "fidelityHint": "Degré de conformité entre l'ordre extrait et l'ordre généré.",
+      "truncated": "Seuls les 1 000 premiers champs ont été comparés.",
+      "problemFields": "Champs manquants ou altérés ({count})",
+      "allFound": "Tous les champs générés ont été retrouvés.",
+      "notRenderedCount": "{count} champs ne sont pas imprimés par ce modèle ou sont masqués ; ils ne comptent pas dans le rappel.",
+      "entryField": "{section} {index} : {field}",
+      "headingField": "Titre : {section}",
+      "fieldStatus": {
+        "found": "Trouvé",
+        "garbled": "Altéré",
+        "missing": "Manquant",
+        "not_rendered": "Non imprimé",
+        "hidden": "Masqué"
+      }
+    },
+    "sections": {
+      "summary": "Résumé",
+      "workExperience": "Expérience",
+      "education": "Formation",
+      "personalProjects": "Projet",
+      "additional": "Compétences et distinctions",
+      "custom": "Section personnalisée"
+    },
+    "fields": {
+      "personalInfo": {
+        "name": "Nom",
+        "title": "Intitulé du poste",
+        "email": "E-mail",
+        "phone": "Téléphone",
+        "location": "Lieu",
+        "website": "Site web",
+        "linkedin": "LinkedIn",
+        "github": "GitHub"
+      },
+      "summary": "Résumé",
+      "heading": "Titre de section",
+      "workExperience": {
+        "title": "Intitulé du poste",
+        "company": "Entreprise",
+        "location": "Lieu",
+        "years": "Dates",
+        "description": "Puce"
+      },
+      "education": {
+        "degree": "Diplôme",
+        "institution": "Établissement",
+        "years": "Dates",
+        "description": "Puce"
+      },
+      "personalProjects": {
+        "name": "Nom du projet",
+        "role": "Rôle",
+        "years": "Dates",
+        "description": "Puce"
+      },
+      "additional": {
+        "heading": "Titre compétences et distinctions",
+        "technicalSkills": "Compétence",
+        "languages": "Langue",
+        "certificationsTraining": "Certification",
+        "awards": "Distinction"
+      },
+      "customSections": {
+        "title": "Titre",
+        "subtitle": "Sous-titre",
+        "location": "Lieu",
+        "years": "Dates",
+        "description": "Puce",
+        "strings": "Élément",
+        "text": "Texte"
+      }
+    },
+    "profiles": {
+      "title": "Profils ATS heuristiques",
+      "disclaimer": "Approximations : ces tests repondérés selon l'exigence de lecture attribuée à chaque système. Non vérifiés par les éditeurs.",
+      "passes": "Lecture probable",
+      "atRisk": "À risque",
+      "names": {
+        "workday": "Workday",
+        "taleo": "Taleo",
+        "successfactors": "SuccessFactors",
+        "icims": "iCIMS",
+        "greenhouse": "Greenhouse",
+        "lever": "Lever"
+      }
+    },
+    "templates": {
+      "title": "Tous les modèles",
+      "caption": "Résultats du test de lecture par modèle avec vos paramètres actuels",
+      "template": "Modèle",
+      "status": "Statut",
+      "details": "Détails",
+      "viewDetails": "Voir les détails",
+      "selected": "Affiché",
+      "statuses": {
+        "ok": "Testé",
+        "render_failed": "Échec de génération",
+        "timed_out": "Délai dépassé"
+      },
+      "errors": {
+        "render_busy": "Le générateur PDF est resté occupé. Réessayez dans un instant.",
+        "render_timeout": "La génération a dépassé le délai.",
+        "render_error": "La génération a échoué.",
+        "analysis_error": "Le PDF généré n'a pas pu être analysé.",
+        "budget_exhausted": "Non testé : le temps disponible est écoulé."
+      }
+    },
+    "preview": {
+      "title": "Texte extrait (aperçu)",
+      "empty": "Aucun texte n'a été extrait."
+    },
+    "errors": {
+      "title": "Échec du test de lecture",
+      "busy": "Un autre test de lecture est en cours. Réessayez dans un instant.",
+      "retryIn": "Réessayer dans {seconds} s",
+      "timeout": "Le test a dépassé le délai. Réessayez ou testez un seul modèle.",
+      "too_large": "Le fichier est trop volumineux. La limite est de 4 Mo.",
+      "invalid_file": "Le fichier n'est pas un document PDF, DOC ou DOCX lisible.",
+      "not_found": "Ce CV n'existe plus.",
+      "not_ready": "Ce CV est encore en cours de traitement. Réessayez une fois le traitement terminé.",
+      "renderer_unavailable": "Le générateur PDF est indisponible ou occupé. Réessayez dans un instant.",
+      "server": "Le test de lecture a échoué. Veuillez réessayer.",
+      "network": "Impossible de joindre le serveur. Vérifiez votre connexion et réessayez."
+    },
+    "upload": {
+      "cardTitle": "Test de lecture ATS",
+      "cardDescription": "Tester un PDF ou DOCX",
+      "dialogTitle": "Test de lecture ATS : importer un fichier",
+      "description": "Importez n'importe quel CV en PDF ou DOCX pour voir ce qu'un extracteur de texte de type ATS en retire. Le fichier est analysé en mémoire et n'est jamais enregistré.",
+      "fileLabel": "Fichier du CV (PDF ou DOCX, 4 Mo max.)",
+      "dropHint": "Déposez un fichier ici ou choisissez-en un",
+      "chooseFile": "Choisir un fichier",
+      "selectedFile": "Sélectionné : {name} ({size})",
+      "invalidType": "Choisissez un fichier PDF, DOCX ou DOC.",
+      "tooLarge": "Le fichier dépasse 4 Mo.",
+      "contentLanguage": "Langue du CV",
+      "autoDetect": "Détection automatique",
+      "languages": {
+        "en": "Anglais",
+        "es": "Espagnol",
+        "fr": "Français",
+        "pt": "Portugais",
+        "de": "Allemand",
+        "ja": "Japonais",
+        "ko": "Coréen",
+        "zh": "Chinois"
+      }
+    }
   }
 }

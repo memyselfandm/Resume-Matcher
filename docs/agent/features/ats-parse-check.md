@@ -351,6 +351,28 @@ the docstring of `scripts/generate_ats_render_fixtures.py` (`--base-url`).
 The same flow runs end to end against a local frontend and Chromium as an
 opt-in test: `uv run pytest -m pdf`.
 
+## Web UI
+
+- **Builder** (`components/builder/resume-builder.tsx`, resume tab): a
+  collapsible "ATS Parse Check" panel below the formatting controls checks the
+  saved resume with the user's current template settings (the
+  `resume_builder_settings` localStorage entry) and the UI locale as
+  `settings.lang`, exactly as the PDF download renders it. A toggle switches to
+  `all_templates`, shown as a per-template comparison table.
+- **Tailor** (`app/(default)/tailor/page.tsx`): the same panel next to the
+  keyword `ATSScoreCard`, checking the master resume.
+- **Dashboard**: an "ATS Parse Check" card opens an upload dialog for any
+  PDF/DOCX (`POST /ats/parse-check`).
+
+Components live in `components/ats-parse-check/`; the API client is
+`lib/api/parse-check.ts` (429 `Retry-After` drives a retry countdown).
+All text comes from the `atsParseCheck.*` keys in every locale file, built
+from check ids and params by `lib/utils/parse-check-messages.ts`.
+`apps/frontend/tests/fixtures/ats-parse-check-ids.json` lists every id the
+engine can emit; regenerate it after adding a check (`cd apps/backend && uv run
+python -m app.scripts.export_check_ids`). A backend test fails when it is
+stale, and a frontend test fails when any locale lacks a message for an id.
+
 ## Scope and caveats
 
 - The extractor model is **line-based** (pdfminer lines rebuilt into visual

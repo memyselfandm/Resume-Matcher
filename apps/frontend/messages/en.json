@@ -1114,5 +1114,363 @@
       "skillGaps": "Skill Gaps",
       "talkingPoints": "Talking Points"
     }
+  },
+  "atsParseCheck": {
+    "title": "ATS Parse Check",
+    "intro": "Checks whether an ATS-style text extractor can read this resume's PDF.",
+    "selfConsistency": "Self-consistency check: it measures whether a text extractor recovers your resume's own content from the file. It is not a real ATS's verdict and does not score keyword fit.",
+    "show": "Show parse check",
+    "hide": "Hide parse check",
+    "run": "Run parse check",
+    "rerun": "Check again",
+    "cancel": "Cancel check",
+    "running": "Checking…",
+    "runningAll": "Rendering and checking all 7 templates…",
+    "elapsed": "{seconds}s",
+    "allTemplates": "Check all templates",
+    "allTemplatesDescription": "Renders all 7 templates with your current settings. Takes longer.",
+    "currentTemplate": "Template: {template}",
+    "savedVersionNote": "Checks the last saved version of this resume.",
+    "unsavedChangesNote": "You have unsaved changes. The check uses the last saved version.",
+    "masterResumeNote": "Checks your master resume as rendered with your saved template settings. Check a tailored resume from the builder after you confirm it.",
+    "noResume": "Save or upload a resume to run a parse check.",
+    "empty": "Run a check to see how an ATS-style extractor reads this resume.",
+    "scores": {
+      "parseability": "Parseability",
+      "parseabilityHint": "Extraction and layout: can the text be read in order?",
+      "content": "Content",
+      "contentHint": "Contact details, headings, dates: is the expected content there?",
+      "separateNote": "Two separate scores: a well-parsed but thin resume keeps a high parseability score.",
+      "notAvailable": "N/A",
+      "outOf": "/100"
+    },
+    "extractability": {
+      "label": "Text extraction",
+      "full": "Full",
+      "partial": "Partial",
+      "none": "None",
+      "unsupported_format": "Unsupported format"
+    },
+    "severity": {
+      "fatal": "Fatal",
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low"
+    },
+    "status": {
+      "pass": "Pass",
+      "fail": "Fail",
+      "not_applicable": "Not applicable"
+    },
+    "category": {
+      "extraction": "Extraction",
+      "layout": "Layout",
+      "content": "Content"
+    },
+    "issues": "Issues ({count})",
+    "noIssues": "No issues found.",
+    "passedChecks": "Passed checks ({count})",
+    "notApplicableChecks": "Not applicable ({count})",
+    "expectedByTemplate": "Expected for this template",
+    "expectedByTemplateHint": "This template is two-column by design. The signal is still reported because an ATS may read the columns out of order.",
+    "twoColumn": "Two-column",
+    "checks": {
+      "file_format": {
+        "title": "File format",
+        "fail": "Legacy .doc files are not analyzed. Save the resume as PDF or DOCX and check it again.",
+        "pass": "The file format is supported."
+      },
+      "text_layer": {
+        "title": "Text layer",
+        "fail": "No selectable text was found. An ATS sees an empty resume; export a text-based PDF.",
+        "pass": "Selectable text was found."
+      },
+      "truncated": {
+        "title": "Analysis limits",
+        "fail": "Part of the document was not analyzed (limits: {page_limit} pages, {char_limit} characters; pages skipped as too dense: {dense_pages}).",
+        "pass": "The whole document was analyzed."
+      },
+      "unmapped_glyphs": {
+        "title": "Unmapped glyphs",
+        "fail": "{count} characters were extracted as (cid:NN) placeholders. The font has no Unicode mapping, so an ATS reads garbage for that text.",
+        "pass": "All characters map to readable text."
+      },
+      "icon_font_glyphs": {
+        "title": "Icon fonts",
+        "fail": "{count} icon-font characters were extracted. Replace icons with plain-text labels.",
+        "pass": "No icon-font characters were extracted."
+      },
+      "replacement_characters": {
+        "title": "Unreadable characters",
+        "fail": "{count} unreadable replacement or control characters were extracted.",
+        "pass": "No unreadable characters were extracted."
+      },
+      "text_as_image": {
+        "title": "Text as image",
+        "fail": "Pages {pages} are mostly images with little text; that content is probably invisible to an ATS.",
+        "pass": "No page is text rendered as an image."
+      },
+      "multi_column": {
+        "title": "Columns",
+        "fail": "Multi-column layout detected. An ATS may read the columns out of order.",
+        "pass": "Single-column reading order."
+      },
+      "sidebar": {
+        "title": "Sidebar",
+        "fail": "Narrow sidebar detected on pages {pages}. Sidebar content is often merged into the main text or skipped.",
+        "pass": "No sidebar detected."
+      },
+      "tables": {
+        "title": "Tables",
+        "fail": "Tables detected. Content inside tables is often skipped or scrambled.",
+        "pass": "No tables detected."
+      },
+      "images": {
+        "title": "Images",
+        "fail": "Images detected. An ATS cannot read text inside images.",
+        "pass": "No images detected."
+      },
+      "text_boxes": {
+        "title": "Text boxes",
+        "fail": "Text boxes contain {chars} characters that many ATS parsers skip.",
+        "pass": "No text boxes detected."
+      },
+      "header_footer_contact": {
+        "title": "Contact in header or footer",
+        "fail": "Contact details ({fields}) appear only in the page header or footer, which many ATS parsers ignore.",
+        "pass": "Contact details are in the document body."
+      },
+      "page_count": {
+        "title": "Page count",
+        "fail": "The resume has {pages} pages; most systems prefer {max_pages} or fewer.",
+        "pass": "Page count is within the recommended range."
+      },
+      "contact_email": {
+        "title": "Email",
+        "fail": "No email address was found in the extracted text.",
+        "pass": "Email address found."
+      },
+      "contact_phone": {
+        "title": "Phone",
+        "fail": "No phone number was found in the extracted text.",
+        "pass": "Phone number found."
+      },
+      "contact_linkedin": {
+        "title": "LinkedIn",
+        "fail": "No LinkedIn profile URL was found in the extracted text.",
+        "pass": "LinkedIn profile found."
+      },
+      "section_headings": {
+        "title": "Section headings",
+        "fail": "Standard section headings not found: {missing}.",
+        "pass": "Standard section headings found."
+      },
+      "dates_present": {
+        "title": "Dates",
+        "fail": "Only {count} year mentions found; add dates to each position.",
+        "pass": "Dates found."
+      },
+      "month_year_dates": {
+        "title": "Month and year",
+        "fail": "Dates have no month; use formats like 'Jan 2021' or '01/2021'.",
+        "pass": "Dates include months."
+      },
+      "action_verbs": {
+        "title": "Action verbs",
+        "fail": "{count} distinct action verbs found; aim for {min_count} or more.",
+        "pass": "Bullets use a variety of action verbs."
+      },
+      "quantification": {
+        "title": "Measurable results",
+        "fail": "{count} lines contain measurable results; aim for {min_count} or more.",
+        "pass": "Results are quantified."
+      },
+      "length": {
+        "title": "Length",
+        "fail": "The resume has {words} words ({verdict}); aim for {min_words}-{max_words}.",
+        "pass": "Length is within the recommended range."
+      }
+    },
+    "notApplicable": {
+      "no_text": "Not checked: no text was extracted.",
+      "content_language": "Not checked: this check applies only to some resume languages.",
+      "docx": "Not checked for DOCX files.",
+      "pdf": "Applies to DOCX files only.",
+      "doc": "Not checked for .doc files.",
+      "covered_by_multi_column": "Covered by the column check.",
+      "dense_pages": "Not checked: pages were skipped as too dense.",
+      "default": "Not applicable."
+    },
+    "params": {
+      "none": "none",
+      "listSeparator": ", ",
+      "sections": {
+        "experience": "Experience",
+        "education": "Education",
+        "skills": "Skills"
+      },
+      "contactFields": {
+        "email": "email",
+        "phone": "phone"
+      },
+      "verdict": {
+        "short": "too short",
+        "long": "too long",
+        "ok": "within range"
+      }
+    },
+    "roundtrip": {
+      "title": "Round trip",
+      "recall": "Content recall",
+      "recallHint": "Share of your resume's rendered fields found in the extracted text.",
+      "fidelity": "Order fidelity",
+      "fidelityHint": "How closely the extracted order follows the rendered order.",
+      "truncated": "Only the first 1,000 fields were compared.",
+      "problemFields": "Missing or garbled fields ({count})",
+      "allFound": "Every rendered field was recovered.",
+      "notRenderedCount": "{count} fields are not printed by this template or are hidden; they do not count against recall.",
+      "entryField": "{section} {index}: {field}",
+      "headingField": "Heading: {section}",
+      "fieldStatus": {
+        "found": "Found",
+        "garbled": "Garbled",
+        "missing": "Missing",
+        "not_rendered": "Not rendered",
+        "hidden": "Hidden"
+      }
+    },
+    "sections": {
+      "summary": "Summary",
+      "workExperience": "Experience",
+      "education": "Education",
+      "personalProjects": "Project",
+      "additional": "Skills & Awards",
+      "custom": "Custom section"
+    },
+    "fields": {
+      "personalInfo": {
+        "name": "Name",
+        "title": "Job title",
+        "email": "Email",
+        "phone": "Phone",
+        "location": "Location",
+        "website": "Website",
+        "linkedin": "LinkedIn",
+        "github": "GitHub"
+      },
+      "summary": "Summary",
+      "heading": "Section heading",
+      "workExperience": {
+        "title": "Job title",
+        "company": "Company",
+        "location": "Location",
+        "years": "Dates",
+        "description": "Bullet"
+      },
+      "education": {
+        "degree": "Degree",
+        "institution": "Institution",
+        "years": "Dates",
+        "description": "Bullet"
+      },
+      "personalProjects": {
+        "name": "Project name",
+        "role": "Role",
+        "years": "Dates",
+        "description": "Bullet"
+      },
+      "additional": {
+        "heading": "Skills & Awards heading",
+        "technicalSkills": "Skill",
+        "languages": "Language",
+        "certificationsTraining": "Certification",
+        "awards": "Award"
+      },
+      "customSections": {
+        "title": "Title",
+        "subtitle": "Subtitle",
+        "location": "Location",
+        "years": "Dates",
+        "description": "Bullet",
+        "strings": "Item",
+        "text": "Text"
+      }
+    },
+    "profiles": {
+      "title": "Heuristic ATS profiles",
+      "disclaimer": "Approximations: these checks re-weighted by each system's reported parsing strictness. Not vendor-verified.",
+      "passes": "Likely parses",
+      "atRisk": "At risk",
+      "names": {
+        "workday": "Workday",
+        "taleo": "Taleo",
+        "successfactors": "SuccessFactors",
+        "icims": "iCIMS",
+        "greenhouse": "Greenhouse",
+        "lever": "Lever"
+      }
+    },
+    "templates": {
+      "title": "All templates",
+      "caption": "Parse-check results per template with your current settings",
+      "template": "Template",
+      "status": "Status",
+      "details": "Details",
+      "viewDetails": "View details",
+      "selected": "Showing",
+      "statuses": {
+        "ok": "Checked",
+        "render_failed": "Render failed",
+        "timed_out": "Timed out"
+      },
+      "errors": {
+        "render_busy": "The PDF renderer stayed busy. Try again shortly.",
+        "render_timeout": "Rendering timed out.",
+        "render_error": "Rendering failed.",
+        "analysis_error": "The rendered PDF could not be analyzed.",
+        "budget_exhausted": "Not checked: the time budget ran out."
+      }
+    },
+    "preview": {
+      "title": "Extracted text (preview)",
+      "empty": "No text was extracted."
+    },
+    "errors": {
+      "title": "Parse check failed",
+      "busy": "Another parse check of rendered output is running. Try again shortly.",
+      "retryIn": "Try again in {seconds}s",
+      "timeout": "The parse check timed out. Try again, or check a single template.",
+      "too_large": "The file is too large. The limit is 4 MB.",
+      "invalid_file": "The file is not a readable PDF, DOC, or DOCX document.",
+      "not_found": "This resume no longer exists.",
+      "not_ready": "This resume is still being processed. Try again when processing finishes.",
+      "renderer_unavailable": "The PDF renderer is unavailable or busy. Try again shortly.",
+      "server": "The parse check failed. Please try again.",
+      "network": "Could not reach the server. Check your connection and try again."
+    },
+    "upload": {
+      "cardTitle": "ATS Parse Check",
+      "cardDescription": "Check any PDF or DOCX",
+      "dialogTitle": "ATS Parse Check: upload a file",
+      "description": "Upload any resume PDF or DOCX to see what an ATS-style text extractor recovers. The file is analyzed in memory and never stored.",
+      "fileLabel": "Resume file (PDF or DOCX, max 4 MB)",
+      "dropHint": "Drop a file here or choose one",
+      "chooseFile": "Choose file",
+      "selectedFile": "Selected: {name} ({size})",
+      "invalidType": "Choose a PDF, DOCX, or DOC file.",
+      "tooLarge": "The file is larger than 4 MB.",
+      "contentLanguage": "Resume language",
+      "autoDetect": "Detect automatically",
+      "languages": {
+        "en": "English",
+        "es": "Spanish",
+        "fr": "French",
+        "pt": "Portuguese",
+        "de": "German",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "zh": "Chinese"
+      }
+    }
   }
 }

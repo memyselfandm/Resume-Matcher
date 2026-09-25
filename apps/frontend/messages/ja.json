@@ -1114,5 +1114,363 @@
       "skillGaps": "スキルギャップ",
       "talkingPoints": "話すべき要点"
     }
+  },
+  "atsParseCheck": {
+    "title": "ATS 読み取りチェック",
+    "intro": "ATS 風のテキスト抽出ツールがこの履歴書の PDF を読み取れるかを確認します。",
+    "selfConsistency": "自己整合性チェック：テキスト抽出ツールがファイルから履歴書自身の内容を復元できるかを測定します。実際の ATS の判定ではなく、キーワードの一致度も評価しません。",
+    "show": "読み取りチェックを表示",
+    "hide": "読み取りチェックを非表示",
+    "run": "チェックを実行",
+    "rerun": "もう一度チェック",
+    "cancel": "チェックを中止",
+    "running": "チェック中…",
+    "runningAll": "7 つのテンプレートすべてを生成してチェック中…",
+    "elapsed": "{seconds} 秒",
+    "allTemplates": "すべてのテンプレートをチェック",
+    "allTemplatesDescription": "現在の設定で 7 つのテンプレートすべてを生成します。時間がかかります。",
+    "currentTemplate": "テンプレート：{template}",
+    "savedVersionNote": "この履歴書の最後に保存されたバージョンをチェックします。",
+    "unsavedChangesNote": "未保存の変更があります。チェックには最後に保存されたバージョンが使われます。",
+    "masterResumeNote": "保存済みのテンプレート設定で生成したマスター履歴書をチェックします。カスタマイズした履歴書は、確定後にエディターからチェックできます。",
+    "noResume": "チェックを実行するには、履歴書を保存またはアップロードしてください。",
+    "empty": "チェックを実行すると、ATS 風の抽出ツールがこの履歴書をどう読むかを確認できます。",
+    "scores": {
+      "parseability": "読み取りやすさ",
+      "parseabilityHint": "抽出とレイアウト：テキストを正しい順序で読み取れるか。",
+      "content": "内容",
+      "contentHint": "連絡先・見出し・日付：想定される内容が含まれているか。",
+      "separateNote": "2 つのスコアは独立しています。読み取りやすくても内容が少ない履歴書は、読み取りやすさのスコアが高いままです。",
+      "notAvailable": "該当なし",
+      "outOf": "/100"
+    },
+    "extractability": {
+      "label": "テキスト抽出",
+      "full": "完全",
+      "partial": "一部",
+      "none": "なし",
+      "unsupported_format": "非対応の形式"
+    },
+    "severity": {
+      "fatal": "致命的",
+      "high": "高",
+      "medium": "中",
+      "low": "低"
+    },
+    "status": {
+      "pass": "合格",
+      "fail": "問題あり",
+      "not_applicable": "対象外"
+    },
+    "category": {
+      "extraction": "抽出",
+      "layout": "レイアウト",
+      "content": "内容"
+    },
+    "issues": "問題（{count} 件）",
+    "noIssues": "問題は見つかりませんでした。",
+    "passedChecks": "合格したチェック（{count} 件）",
+    "notApplicableChecks": "対象外（{count} 件）",
+    "expectedByTemplate": "このテンプレートでは想定内",
+    "expectedByTemplateHint": "このテンプレートは 2 段組みのデザインです。ATS が段の順序を誤って読む可能性があるため、この指摘も表示しています。",
+    "twoColumn": "2 段組み",
+    "checks": {
+      "file_format": {
+        "title": "ファイル形式",
+        "fail": "旧形式の .doc ファイルは分析できません。PDF または DOCX で保存してから再度チェックしてください。",
+        "pass": "対応しているファイル形式です。"
+      },
+      "text_layer": {
+        "title": "テキストレイヤー",
+        "fail": "選択可能なテキストが見つかりません。ATS には空の履歴書に見えます。テキストを含む PDF を書き出してください。",
+        "pass": "選択可能なテキストが見つかりました。"
+      },
+      "truncated": {
+        "title": "分析の上限",
+        "fail": "文書の一部は分析されていません（上限：{page_limit} ページ、{char_limit} 文字。密度が高すぎて省略したページ：{dense_pages}）。",
+        "pass": "文書全体を分析しました。"
+      },
+      "unmapped_glyphs": {
+        "title": "対応付けのないグリフ",
+        "fail": "{count} 文字が (cid:NN) という記号として抽出されました。フォントに Unicode の対応付けがないため、ATS には意味のない文字列として読まれます。",
+        "pass": "すべての文字が読み取り可能なテキストに対応しています。"
+      },
+      "icon_font_glyphs": {
+        "title": "アイコンフォント",
+        "fail": "アイコンフォントの文字が {count} 個抽出されました。アイコンをテキストのラベルに置き換えてください。",
+        "pass": "アイコンフォントの文字は抽出されませんでした。"
+      },
+      "replacement_characters": {
+        "title": "読み取れない文字",
+        "fail": "読み取れない置換文字または制御文字が {count} 個抽出されました。",
+        "pass": "読み取れない文字は抽出されませんでした。"
+      },
+      "text_as_image": {
+        "title": "画像化されたテキスト",
+        "fail": "{pages} ページはほぼ画像でテキストがわずかです。この内容は ATS から見えない可能性が高いです。",
+        "pass": "テキストが画像化されたページはありません。"
+      },
+      "multi_column": {
+        "title": "段組み",
+        "fail": "複数段のレイアウトが検出されました。ATS が段の順序を誤って読む可能性があります。",
+        "pass": "1 段組みの読み取り順序です。"
+      },
+      "sidebar": {
+        "title": "サイドバー",
+        "fail": "{pages} ページで幅の狭いサイドバーが検出されました。サイドバーの内容は本文に混ざるか、読み飛ばされることがよくあります。",
+        "pass": "サイドバーは検出されませんでした。"
+      },
+      "tables": {
+        "title": "表",
+        "fail": "表が検出されました。表の中の内容は読み飛ばされたり、順序が崩れたりすることがよくあります。",
+        "pass": "表は検出されませんでした。"
+      },
+      "images": {
+        "title": "画像",
+        "fail": "画像が検出されました。ATS は画像内のテキストを読み取れません。",
+        "pass": "画像は検出されませんでした。"
+      },
+      "text_boxes": {
+        "title": "テキストボックス",
+        "fail": "テキストボックスに {chars} 文字あり、多くの ATS はこれを読み飛ばします。",
+        "pass": "テキストボックスは検出されませんでした。"
+      },
+      "header_footer_contact": {
+        "title": "ヘッダー・フッターの連絡先",
+        "fail": "連絡先（{fields}）がヘッダーまたはフッターにしかありません。多くの ATS はこれらを無視します。",
+        "pass": "連絡先は本文にあります。"
+      },
+      "page_count": {
+        "title": "ページ数",
+        "fail": "履歴書は {pages} ページです。多くのシステムでは {max_pages} ページ以内が好まれます。",
+        "pass": "ページ数は推奨範囲内です。"
+      },
+      "contact_email": {
+        "title": "メールアドレス",
+        "fail": "抽出したテキストにメールアドレスが見つかりません。",
+        "pass": "メールアドレスが見つかりました。"
+      },
+      "contact_phone": {
+        "title": "電話番号",
+        "fail": "抽出したテキストに電話番号が見つかりません。",
+        "pass": "電話番号が見つかりました。"
+      },
+      "contact_linkedin": {
+        "title": "LinkedIn",
+        "fail": "抽出したテキストに LinkedIn のプロフィール URL が見つかりません。",
+        "pass": "LinkedIn のプロフィールが見つかりました。"
+      },
+      "section_headings": {
+        "title": "セクション見出し",
+        "fail": "標準的なセクション見出しが見つかりません：{missing}。",
+        "pass": "標準的なセクション見出しが見つかりました。"
+      },
+      "dates_present": {
+        "title": "日付",
+        "fail": "年の記載が {count} 件しかありません。各職歴に日付を追加してください。",
+        "pass": "日付が見つかりました。"
+      },
+      "month_year_dates": {
+        "title": "年月",
+        "fail": "日付に月がありません。'Jan 2021' や '01/2021' のような形式を使ってください。",
+        "pass": "日付に月が含まれています。"
+      },
+      "action_verbs": {
+        "title": "動作動詞",
+        "fail": "異なる動作動詞が {count} 個見つかりました。{min_count} 個以上を目指してください。",
+        "pass": "箇条書きにさまざまな動作動詞が使われています。"
+      },
+      "quantification": {
+        "title": "定量的な成果",
+        "fail": "定量的な成果を含む行は {count} 行です。{min_count} 行以上を目指してください。",
+        "pass": "成果が数値で示されています。"
+      },
+      "length": {
+        "title": "分量",
+        "fail": "履歴書は {words} 語です（{verdict}）。{min_words}〜{max_words} 語を目指してください。",
+        "pass": "分量は推奨範囲内です。"
+      }
+    },
+    "notApplicable": {
+      "no_text": "未チェック：テキストが抽出されませんでした。",
+      "content_language": "未チェック：このチェックは一部の言語の履歴書にのみ適用されます。",
+      "docx": "DOCX ファイルではチェックしません。",
+      "pdf": "DOCX ファイルにのみ適用されます。",
+      "doc": ".doc ファイルではチェックしません。",
+      "covered_by_multi_column": "段組みのチェックに含まれます。",
+      "dense_pages": "未チェック：密度が高すぎるページを省略しました。",
+      "default": "対象外です。"
+    },
+    "params": {
+      "none": "なし",
+      "listSeparator": "、",
+      "sections": {
+        "experience": "職歴",
+        "education": "学歴",
+        "skills": "スキル"
+      },
+      "contactFields": {
+        "email": "メール",
+        "phone": "電話"
+      },
+      "verdict": {
+        "short": "短すぎ",
+        "long": "長すぎ",
+        "ok": "範囲内"
+      }
+    },
+    "roundtrip": {
+      "title": "往復チェック",
+      "recall": "内容の再現率",
+      "recallHint": "履歴書で出力された項目のうち、抽出テキストで見つかった割合。",
+      "fidelity": "順序の忠実度",
+      "fidelityHint": "抽出された順序が出力された順序にどれだけ沿っているか。",
+      "truncated": "最初の 1,000 項目のみ比較しました。",
+      "problemFields": "欠落または崩れた項目（{count} 件）",
+      "allFound": "出力されたすべての項目を復元できました。",
+      "notRenderedCount": "{count} 項目はこのテンプレートで出力されないか非表示のため、再現率には含まれません。",
+      "entryField": "{section} {index}：{field}",
+      "headingField": "見出し：{section}",
+      "fieldStatus": {
+        "found": "検出",
+        "garbled": "崩れ",
+        "missing": "欠落",
+        "not_rendered": "出力なし",
+        "hidden": "非表示"
+      }
+    },
+    "sections": {
+      "summary": "概要",
+      "workExperience": "職歴",
+      "education": "学歴",
+      "personalProjects": "プロジェクト",
+      "additional": "スキル・受賞",
+      "custom": "カスタムセクション"
+    },
+    "fields": {
+      "personalInfo": {
+        "name": "氏名",
+        "title": "職種",
+        "email": "メールアドレス",
+        "phone": "電話番号",
+        "location": "所在地",
+        "website": "ウェブサイト",
+        "linkedin": "LinkedIn",
+        "github": "GitHub"
+      },
+      "summary": "概要",
+      "heading": "セクション見出し",
+      "workExperience": {
+        "title": "職種",
+        "company": "会社",
+        "location": "所在地",
+        "years": "期間",
+        "description": "箇条書き"
+      },
+      "education": {
+        "degree": "学位",
+        "institution": "学校",
+        "years": "期間",
+        "description": "箇条書き"
+      },
+      "personalProjects": {
+        "name": "プロジェクト名",
+        "role": "役割",
+        "years": "期間",
+        "description": "箇条書き"
+      },
+      "additional": {
+        "heading": "スキル・受賞の見出し",
+        "technicalSkills": "スキル",
+        "languages": "言語",
+        "certificationsTraining": "資格",
+        "awards": "受賞"
+      },
+      "customSections": {
+        "title": "タイトル",
+        "subtitle": "サブタイトル",
+        "location": "所在地",
+        "years": "期間",
+        "description": "箇条書き",
+        "strings": "項目",
+        "text": "テキスト"
+      }
+    },
+    "profiles": {
+      "title": "ヒューリスティックな ATS プロファイル",
+      "disclaimer": "近似値です。各システムの読み取りの厳しさとされる値でこれらのチェックを重み付けし直したもので、ベンダーによる検証は受けていません。",
+      "passes": "読み取れる見込み",
+      "atRisk": "要注意",
+      "names": {
+        "workday": "Workday",
+        "taleo": "Taleo",
+        "successfactors": "SuccessFactors",
+        "icims": "iCIMS",
+        "greenhouse": "Greenhouse",
+        "lever": "Lever"
+      }
+    },
+    "templates": {
+      "title": "すべてのテンプレート",
+      "caption": "現在の設定でのテンプレートごとの読み取りチェック結果",
+      "template": "テンプレート",
+      "status": "状態",
+      "details": "詳細",
+      "viewDetails": "詳細を表示",
+      "selected": "表示中",
+      "statuses": {
+        "ok": "チェック済み",
+        "render_failed": "生成に失敗",
+        "timed_out": "時間切れ"
+      },
+      "errors": {
+        "render_busy": "PDF 生成エンジンが混み合っていました。しばらくしてから再試行してください。",
+        "render_timeout": "生成がタイムアウトしました。",
+        "render_error": "生成に失敗しました。",
+        "analysis_error": "生成された PDF を分析できませんでした。",
+        "budget_exhausted": "未チェック：制限時間を超えました。"
+      }
+    },
+    "preview": {
+      "title": "抽出されたテキスト（プレビュー）",
+      "empty": "テキストは抽出されませんでした。"
+    },
+    "errors": {
+      "title": "読み取りチェックに失敗しました",
+      "busy": "別の読み取りチェックが実行中です。しばらくしてから再試行してください。",
+      "retryIn": "{seconds} 秒後に再試行",
+      "timeout": "チェックがタイムアウトしました。再試行するか、1 つのテンプレートだけをチェックしてください。",
+      "too_large": "ファイルが大きすぎます。上限は 4 MB です。",
+      "invalid_file": "読み取り可能な PDF、DOC、DOCX 文書ではありません。",
+      "not_found": "この履歴書は存在しません。",
+      "not_ready": "この履歴書はまだ処理中です。処理が終わってから再試行してください。",
+      "renderer_unavailable": "PDF 生成エンジンが利用できないか混み合っています。しばらくしてから再試行してください。",
+      "server": "読み取りチェックに失敗しました。もう一度お試しください。",
+      "network": "サーバーに接続できません。接続を確認して再試行してください。"
+    },
+    "upload": {
+      "cardTitle": "ATS 読み取りチェック",
+      "cardDescription": "任意の PDF・DOCX をチェック",
+      "dialogTitle": "ATS 読み取りチェック：ファイルをアップロード",
+      "description": "PDF または DOCX の履歴書をアップロードすると、ATS 風のテキスト抽出ツールが何を復元するかを確認できます。ファイルはメモリ上で分析され、保存されることはありません。",
+      "fileLabel": "履歴書ファイル（PDF または DOCX、最大 4 MB）",
+      "dropHint": "ここにファイルをドロップするか、選択してください",
+      "chooseFile": "ファイルを選択",
+      "selectedFile": "選択中：{name}（{size}）",
+      "invalidType": "PDF、DOCX、DOC ファイルを選択してください。",
+      "tooLarge": "ファイルが 4 MB を超えています。",
+      "contentLanguage": "履歴書の言語",
+      "autoDetect": "自動検出",
+      "languages": {
+        "en": "英語",
+        "es": "スペイン語",
+        "fr": "フランス語",
+        "pt": "ポルトガル語",
+        "de": "ドイツ語",
+        "ja": "日本語",
+        "ko": "韓国語",
+        "zh": "中国語"
+      }
+    }
   }
 }

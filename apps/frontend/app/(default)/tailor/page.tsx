@@ -21,12 +21,16 @@ import { Loader2, ArrowLeft, AlertTriangle, Settings } from 'lucide-react';
 import { useTranslations } from '@/lib/i18n';
 import { DiffPreviewModal } from '@/components/tailor/diff-preview-modal';
 import { ATSScoreCard } from '@/components/tailor/ats-score-card';
+import { ParseCheckPanel } from '@/components/ats-parse-check/parse-check-panel';
+import { readStoredTemplateSettings } from '@/lib/utils/template-settings-storage';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { useOperationOwner } from '@/hooks/use-operation-owner';
 
 export default function TailorPage() {
-  const { t } = useTranslations();
+  const { t, locale } = useTranslations();
   const { begin, isCurrent, invalidate } = useOperationOwner('tailor');
+  // The builder's saved template settings, so the check matches the PDF download.
+  const [templateSettings] = useState(readStoredTemplateSettings);
   const confirmedResponses = useRef(new WeakMap<ImprovedResult, ImprovedResult>());
   const countedResumes = useRef(new Set<string>());
   const confirmationBusy = useRef(false);
@@ -507,12 +511,21 @@ export default function TailorPage() {
         </div>
       </div>
 
-      {/* ATS Score Breakdown — shown once a preview result is available */}
-      {pendingResult?.data?.ats_score && (
-        <div className="w-full max-w-4xl mt-6">
-          <ATSScoreCard atsScore={pendingResult.data.ats_score} />
-        </div>
-      )}
+      <div
+        className={`w-full max-w-4xl mt-6 grid grid-cols-1 gap-6 items-start ${
+          pendingResult?.data?.ats_score ? 'lg:grid-cols-2' : ''
+        }`}
+      >
+        {/* ATS Score Breakdown — shown once a preview result is available */}
+        {pendingResult?.data?.ats_score && <ATSScoreCard atsScore={pendingResult.data.ats_score} />}
+        {/* Parseability of the master resume's rendered PDF (keyword fit is above) */}
+        <ParseCheckPanel
+          resumeId={masterResumeId}
+          settings={templateSettings}
+          lang={locale}
+          note={t('atsParseCheck.masterResumeNote')}
+        />
+      </div>
 
       {/* Diff preview modal */}
       {showDiffModal && pendingResult && (
