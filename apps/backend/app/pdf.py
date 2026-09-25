@@ -8,6 +8,9 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -93,6 +96,14 @@ _PDF_CLEANUP_RESERVE_SECONDS = _bounded_env_float(
 )
 
 
+# Client-facing details of two render failures. The PDF route returns them as
+# 503 details, and the own-output parse check
+# (app/services/ats_parse/own_output.py) matches these exact strings to tell a
+# busy renderer (retried) from a timeout (not retried): change them together.
+RENDER_BUSY_MESSAGE = "PDF renderer is busy. Please try again shortly."
+RENDER_TIMEOUT_MESSAGE = "PDF rendering timed out. Please try again, or try a simpler resume."
+
+
 class PDFRenderError(Exception):
     """Custom exception for PDF rendering errors with helpful messages."""
 
@@ -122,6 +133,11 @@ _subprocess_lock = threading.Lock()
 _subprocess_supported = True
 _admission_lock = threading.Lock()
 _active_renders = 0
+# Renders requested by a background check (parse-check of own output) rather
+# than a user download. Only refused user downloads are recorded, so
+# background work can yield the renderer to a user who retries.
+_background_render: ContextVar[bool] = ContextVar("pdf_background_render", default=False)
+_last_download_refusal: float | None = None
 _background_owners: set[asyncio.Task[None]] = set()
 
 
@@ -626,14 +642,40 @@ async def close_pdf_renderer() -> None:
         )
 
 
+def render_capacity() -> int:
+    """Configured number of concurrent renders (``PDF_MAX_CONCURRENCY``)."""
+    return _PDF_MAX_CONCURRENCY
+
+
+@contextmanager
+def background_renders() -> Iterator[None]:
+    """Mark renders started in this context as background work.
+
+    A background render refused for lack of capacity is not recorded as a
+    refused download (see ``seconds_since_download_refusal``).
+    """
+    token = _background_render.set(True)
+    try:
+        yield
+    finally:
+        _background_render.reset(token)
+
+
+def seconds_since_download_refusal() -> float | None:
+    """Seconds since a user download was last refused as busy, or ``None``."""
+    with _admission_lock:
+        refused_at = _last_download_refusal
+    return None if refused_at is None else time.monotonic() - refused_at
+
+
 def _acquire_render_slot() -> None:
     """Acquire fail-fast renderer capacity without creating an implicit queue."""
-    global _active_renders
+    global _active_renders, _last_download_refusal
     with _admission_lock:
         if _active_renders >= _PDF_MAX_CONCURRENCY:
-            raise PDFRenderOverloadedError(
-                "PDF renderer is busy. Please try again shortly."
-            )
+            if not _background_render.get():
+                _last_download_refusal = time.monotonic()
+            raise PDFRenderOverloadedError(RENDER_BUSY_MESSAGE)
         _active_renders += 1
 
 
@@ -895,9 +937,7 @@ async def render_resume_pdf(
         raise PDFRenderError("PDF renderer failed to initialize.")
     except _PDFDeadlineExceeded as error:
         logger.warning("PDF rendering timed out during %s for %s", error.stage, url)
-        raise PDFRenderTimeoutError(
-            "PDF rendering timed out. Please try again, or try a simpler resume."
-        ) from error
+        raise PDFRenderTimeoutError(RENDER_TIMEOUT_MESSAGE) from error
     except PlaywrightError as error:
         _raise_playwright_error(error, url)
     finally:
