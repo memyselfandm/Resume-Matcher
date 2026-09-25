@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from app.services.ats_parse.extract import check_deadline
@@ -61,6 +61,16 @@ _PERSONAL_FIELDS = ("name", "title", "email", "phone", "location", "website", "l
 _ADDITIONAL_FIELDS = ("technicalSkills", "languages", "certificationsTraining", "awards")
 _BUILTIN_SECTIONS = frozenset(DEFAULT_SECTION_ORDER)
 CUSTOM_GROUP = "custom"
+# Field kinds a custom section prints for each ``sectionMeta.sectionType``
+# (``DynamicResumeSection`` and the two-column templates' custom renderers
+# pick the content by the meta type; other content is not printed).
+_CUSTOM_KINDS_BY_TYPE: dict[str, frozenset[str]] = {
+    "itemList": frozenset(
+        f"customSections.{name}" for name in ("title", "subtitle", "location", "years", "description")
+    ),
+    "stringList": frozenset({"customSections.strings"}),
+    "text": frozenset({"customSections.text"}),
+}
 
 
 @dataclass(frozen=True)
@@ -69,6 +79,8 @@ class ExpectedField:
 
     ``group`` names the layout unit the field is placed with: a personal field
     kind, a built-in section key, an additional-list kind, or ``custom``.
+    ``rendered`` is ``False`` when no template prints the field (see
+    ``expected_fields``); such fields are reported ``not_rendered``.
     """
 
     path: str
@@ -78,6 +90,7 @@ class ExpectedField:
     entry: str | None = None
     anchor: bool = False
     group: str = ""
+    rendered: bool = True
 
 
 def _text(value: Any) -> str:
@@ -213,6 +226,25 @@ def _heading_field(key: str, heading: str, hidden: bool) -> ExpectedField:
     return ExpectedField(f"heading.{key}", "heading", heading, hidden, group=group)
 
 
+def _mark_custom_rendering(
+    entry: dict[str, Any], section_fields: list[ExpectedField]
+) -> list[ExpectedField]:
+    """Mark the fields of a custom section that the templates do not print.
+
+    The templates print a non-built-in section only when its meta has a falsy
+    ``isDefault`` (``!section.isDefault``), and then only the content of its
+    meta ``sectionType``: items, strings, or text.
+    """
+    if entry.get("isDefault"):
+        kinds: frozenset[str] = frozenset()
+    else:
+        kinds = _CUSTOM_KINDS_BY_TYPE.get(str(entry.get("sectionType", "")), frozenset())
+    return [
+        field if field.kind in kinds else replace(field, rendered=False)
+        for field in section_fields
+    ]
+
+
 def expected_fields(source: dict[str, Any]) -> list[ExpectedField]:
     """List every non-empty source value in render order (personal info first)."""
     personal = source.get("personalInfo") or {}
@@ -229,17 +261,21 @@ def expected_fields(source: dict[str, Any]) -> list[ExpectedField]:
     meta = [entry for entry in source.get("sectionMeta") or [] if isinstance(entry, dict)]
     if meta:
         ordered = sorted(meta, key=lambda entry: (entry.get("order", 0), str(entry.get("id", ""))))
-        sections = [
-            (str(entry.get("key", "")), _text(entry.get("displayName")), not entry.get("isVisible", True))
-            for entry in ordered
-            if entry.get("key") != "personalInfo"
-        ]
+        sections = [entry for entry in ordered if entry.get("key") != "personalInfo"]
     else:
-        sections = [(key, "", False) for key in DEFAULT_SECTION_ORDER]
-    for key, heading, hidden in sections:
+        sections = [{"key": key} for key in DEFAULT_SECTION_ORDER]
+    for entry in sections:
+        key = str(entry.get("key", ""))
+        heading = _text(entry.get("displayName"))
+        hidden = not entry.get("isVisible", True)
         section_fields = _section_fields(key, source, hidden)
+        if key not in _BUILTIN_SECTIONS:
+            section_fields = _mark_custom_rendering(entry, section_fields)
         if heading and any(field.value.strip() for field in section_fields):
-            fields.append(_heading_field(key, heading, hidden))
+            heading_field = _heading_field(key, heading, hidden)
+            if not any(field.rendered and field.value.strip() for field in section_fields):
+                heading_field = replace(heading_field, rendered=False)
+            fields.append(heading_field)
         fields.extend(section_fields)
     return [field for field in fields if normalize_text(field.value, source_html=True)]
 
@@ -498,7 +534,9 @@ def compute_roundtrip(
     active = [
         field
         for field in fields
-        if not field.hidden and (rendered_fields is None or field.kind in rendered_fields)
+        if not field.hidden
+        and field.rendered
+        and (rendered_fields is None or field.kind in rendered_fields)
     ]
     anchors = _anchor_entries(active, haystack, deadline)
     spans = _entry_spans(active, anchors, len(haystack))
@@ -511,7 +549,7 @@ def compute_roundtrip(
         if field.hidden:
             results.append(RoundtripField(field=field.path, status="hidden", score=0.0))
             continue
-        if rendered_fields is not None and field.kind not in rendered_fields:
+        if not field.rendered or (rendered_fields is not None and field.kind not in rendered_fields):
             results.append(RoundtripField(field=field.path, status="not_rendered", score=0.0))
             continue
         needle = _needle(field)
