@@ -117,8 +117,8 @@ describe('ParseCheckReportView', () => {
     expect(within(profiles).getByText('Heuristic ATS profiles')).toBeInTheDocument();
     expect(within(profiles).getByText(/Not vendor-verified/)).toBeInTheDocument();
     expect(within(profiles).getByText('Workday')).toBeInTheDocument();
-    expect(within(profiles).getByText('At risk')).toBeInTheDocument();
-    expect(within(profiles).getByText('Likely parses')).toBeInTheDocument();
+    expect(within(profiles).getByText('Heuristic: at risk')).toBeInTheDocument();
+    expect(within(profiles).getByText('Passes heuristic')).toBeInTheDocument();
   });
 
   it('reports round-trip recall, fidelity, and missing or garbled fields', () => {
@@ -157,7 +157,7 @@ describe('ParseCheckReportView', () => {
     expect(within(roundtrip).getAllByText('Missing')).toHaveLength(2);
     expect(within(roundtrip).getByText('Garbled')).toBeInTheDocument();
     // not_rendered / hidden fields are explained, not listed as problems.
-    expect(within(roundtrip).getByText(/2 fields are not printed/)).toBeInTheDocument();
+    expect(within(roundtrip).getByText(/not counted in recall\): 2/)).toBeInTheDocument();
   });
 });
 
@@ -345,5 +345,121 @@ describe('ParseCheckPanel', () => {
     expect(
       screen.getByText('Run a check to see how an ATS-style extractor reads this resume.')
     ).toBeInTheDocument();
+  });
+
+  it('warns when the settings changed since the shown result', async () => {
+    // A fresh Response per call: a body can be read only once.
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(makeOwnOutput([makeTemplateResult('swiss-single')]))
+    );
+    const { rerender } = renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Run parse check' }));
+    await screen.findByTestId('parse-check-report');
+    expect(screen.queryByTestId('settings-changed')).not.toBeInTheDocument();
+
+    const changed = { ...DEFAULT_TEMPLATE_SETTINGS, compactMode: true };
+    rerender(<ParseCheckPanel resumeId="resume-1" settings={changed} lang="es" defaultExpanded />);
+    expect(screen.getByTestId('settings-changed')).toHaveTextContent(
+      'Settings changed since this check.'
+    );
+    rerender(<ParseCheckPanel resumeId="resume-1" settings={changed} lang="en" defaultExpanded />);
+    expect(screen.getByTestId('settings-changed')).toBeInTheDocument();
+
+    // Re-running with the current settings clears the warning.
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await screen.findByTestId('parse-check-report');
+    expect(screen.queryByTestId('settings-changed')).not.toBeInTheDocument();
+  });
+
+  it('ignores the selected template after an all-templates check', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        makeOwnOutput([makeTemplateResult('swiss-single'), makeTemplateResult('modern')])
+      )
+    );
+    const { rerender } = renderPanel();
+    fireEvent.click(screen.getByRole('switch', { name: 'Check all templates' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run parse check' }));
+    await screen.findByTestId('templates-table');
+    rerender(
+      <ParseCheckPanel
+        resumeId="resume-1"
+        settings={{ ...DEFAULT_TEMPLATE_SETTINGS, template: 'latex' }}
+        lang="es"
+        defaultExpanded
+      />
+    );
+    expect(screen.queryByTestId('settings-changed')).not.toBeInTheDocument();
+  });
+
+  it('sends only the settings fields the endpoint accepts', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(makeOwnOutput([makeTemplateResult('swiss-single')])));
+    const stored = {
+      ...DEFAULT_TEMPLATE_SETTINGS,
+      legacyOption: true,
+      margins: { ...DEFAULT_TEMPLATE_SETTINGS.margins, gutter: 4 },
+    } as unknown as typeof DEFAULT_TEMPLATE_SETTINGS;
+    renderPanel({ settings: stored });
+    fireEvent.click(screen.getByRole('button', { name: 'Run parse check' }));
+    await screen.findByTestId('parse-check-report');
+    const { settings } = lastRequestBody() as { settings: Record<string, unknown> };
+    expect(Object.keys(settings).sort()).toEqual(
+      [
+        'accentColor',
+        'compactMode',
+        'fontSize',
+        'lang',
+        'margins',
+        'pageSize',
+        'showContactIcons',
+        'spacing',
+        'template',
+      ].sort()
+    );
+    expect(settings.margins).toEqual({ top: 10, bottom: 10, left: 10, right: 10 });
+    expect(settings.lang).toBe('es');
+  });
+
+  it('explains a 422 from the resume check as rejected settings, not a bad file', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{"detail":"x"}', { status: 422 }));
+    renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Run parse check' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('The template settings were rejected.');
+    expect(alert).not.toHaveTextContent('readable PDF');
+  });
+
+  it('gives detail buttons an accessible name that starts with the visible label', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        makeOwnOutput([makeTemplateResult('swiss-single'), makeTemplateResult('modern')])
+      )
+    );
+    renderPanel();
+    fireEvent.click(screen.getByRole('switch', { name: 'Check all templates' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run parse check' }));
+    await screen.findByTestId('templates-table');
+    const button = screen.getByRole('button', { name: 'View details Modern' });
+    expect(button).not.toHaveAttribute('aria-label');
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Showing Single Column' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+  });
+});
+
+describe('ParseCheckReportView fallbacks', () => {
+  it('shows an unknown profile id as-is rather than a key path', () => {
+    render(
+      <ParseCheckReportView
+        report={makeReport({
+          profiles: [{ id: 'future_ats', kind: 'heuristic', score: 70, passes: true }],
+        })}
+      />
+    );
+    expect(screen.getByText('future_ats')).toBeInTheDocument();
+    expect(screen.queryByText(/atsParseCheck\.profiles/)).not.toBeInTheDocument();
   });
 });

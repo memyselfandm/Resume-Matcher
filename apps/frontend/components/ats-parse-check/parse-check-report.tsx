@@ -25,7 +25,7 @@ const SEVERITY_SQUARE: Record<ParseCheckSeverity, string> = {
 
 const FIELD_STATUS_STYLE: Record<RoundtripFieldStatus, string> = {
   found: 'border-green-700 text-green-700',
-  garbled: 'border-orange-600 text-orange-700',
+  garbled: 'border-orange-600 text-black',
   missing: 'border-red-600 text-red-600',
   not_rendered: 'border-black text-ink-soft',
   hidden: 'border-black text-ink-soft',
@@ -36,6 +36,12 @@ function scoreSquare(score: number | null): string {
   if (score >= 80) return 'bg-green-700';
   if (score >= 60) return 'bg-orange-500';
   return 'bg-red-600';
+}
+
+function profileName(t: Translate, id: string): string {
+  const key = `atsParseCheck.profiles.names.${id}`;
+  const name = t(key);
+  return name === key ? id : name;
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -287,9 +293,7 @@ function ProfilesSection({ report, t }: { report: ParseCheckReport; t: Translate
         {report.profiles.map((profile) => (
           <li key={profile.id} className="bg-white p-2">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-sans text-sm font-bold">
-                {t(`atsParseCheck.profiles.names.${profile.id}`)}
-              </span>
+              <span className="font-sans text-sm font-bold">{profileName(t, profile.id)}</span>
               <span className="font-mono text-sm tabular-nums">{profile.score}</span>
             </div>
             <div className="flex items-center gap-1.5 mt-1">

@@ -103,7 +103,7 @@ export function ParseCheckUploadDialog({ open, onOpenChange }: ParseCheckUploadD
             </DialogTitle>
           </DialogHeader>
           <p className="font-sans text-sm">{t('atsParseCheck.upload.description')}</p>
-          <SelfConsistencyNote />
+          <SelfConsistencyNote variant="upload" />
 
           <div>
             <p

@@ -8,6 +8,7 @@ import { ToggleSwitch } from '@/components/ui/toggle-switch';
 import type { Locale } from '@/i18n/config';
 import {
   parseCheckResume,
+  toRequestSettings,
   type OwnOutputParseCheck,
   type TemplateParseCheck,
 } from '@/lib/api/parse-check';
@@ -147,12 +148,13 @@ function TemplatesTable({
                       variant="outline"
                       size="sm"
                       aria-pressed={isSelected}
-                      aria-label={`${t('atsParseCheck.templates.viewDetails')}: ${templateName(t, result.template)}`}
                       onClick={() => onSelect(result.template)}
                     >
                       {isSelected
                         ? t('atsParseCheck.templates.selected')
                         : t('atsParseCheck.templates.viewDetails')}
+                      {/* The visible label starts the accessible name; the row adds context. */}{' '}
+                      <span className="sr-only">{templateName(t, result.template)}</span>
                     </Button>
                   )}
                 </td>
@@ -208,6 +210,27 @@ function ResultsView({ data, t }: { data: OwnOutputParseCheck; t: Translate }) {
   );
 }
 
+interface SentSettings {
+  settings: TemplateSettings;
+  lang: Locale | null;
+  allTemplates: boolean;
+}
+
+/**
+ * Whether the current settings render what the last check rendered. With
+ * all templates the selected template does not matter.
+ */
+function sameRenderSettings(
+  sent: SentSettings,
+  current: { settings: TemplateSettings; lang: Locale | null }
+): boolean {
+  const normalize = (settings: TemplateSettings, lang: Locale | null) => {
+    const request = toRequestSettings(settings, lang);
+    return JSON.stringify(sent.allTemplates ? { ...request, template: null } : request);
+  };
+  return normalize(sent.settings, sent.lang) === normalize(current.settings, current.lang);
+}
+
 export interface ParseCheckPanelProps {
   /** Stored resume to check; the panel explains itself and disables the check when null. */
   resumeId: string | null;
@@ -230,7 +253,7 @@ export function ParseCheckPanel({
   const { t } = useTranslations();
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [allTemplates, setAllTemplates] = useState(false);
-  const request = useParseCheckRequest<OwnOutputParseCheck>();
+  const request = useParseCheckRequest<{ result: OwnOutputParseCheck; sent: SentSettings }>();
   const contentId = useId();
 
   const running = request.phase === 'running';
@@ -238,14 +261,19 @@ export function ParseCheckPanel({
 
   const start = () => {
     if (!resumeId) return;
-    void request.run((signal) =>
-      parseCheckResume(resumeId, { settings, lang, allTemplates, signal })
-    );
+    const sent = { settings, lang, allTemplates };
+    void request.run(async (signal) => ({
+      result: await parseCheckResume(resumeId, { ...sent, signal }),
+      sent,
+    }));
   };
+  const data = request.data?.result ?? null;
+  const settingsChanged =
+    request.data !== null && !sameRenderSettings(request.data.sent, { settings, lang });
 
   return (
     <section
-      className="border border-black bg-white shadow-sw-default"
+      className="border-2 border-black bg-white shadow-sw-default"
       data-testid="parse-check-panel"
     >
       <button
@@ -256,7 +284,7 @@ export function ParseCheckPanel({
         className="w-full flex items-center justify-between p-3 hover:bg-paper-tint focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-700"
       >
         <span className="flex items-center gap-2">
-          <span className="w-2 h-2 bg-blue-700" aria-hidden="true" />
+          <span className="w-3 h-3 bg-blue-700" aria-hidden="true" />
           <span className="font-mono text-xs font-bold uppercase tracking-wider">
             {t('atsParseCheck.title')}
           </span>
@@ -274,7 +302,7 @@ export function ParseCheckPanel({
       {expanded && (
         <div id={contentId} className="border-t border-black p-4 space-y-4">
           <p className="font-sans text-sm">{t('atsParseCheck.intro')}</p>
-          <SelfConsistencyNote />
+          <SelfConsistencyNote variant="own" />
           {note && <p className="font-sans text-xs text-ink-soft">{note}</p>}
 
           {!resumeId ? (
@@ -289,7 +317,7 @@ export function ParseCheckPanel({
                 disabled={running}
               />
               {/* Before the first result; a result names its own template. */}
-              {!allTemplates && !request.data && (
+              {!allTemplates && !data && (
                 <p className="font-mono text-xs uppercase tracking-wider">
                   {t('atsParseCheck.currentTemplate', {
                     template: templateName(t, settings.template),
@@ -300,7 +328,7 @@ export function ParseCheckPanel({
                 <Button onClick={start} disabled={running || coolingDown}>
                   {coolingDown
                     ? t('atsParseCheck.errors.retryIn', { seconds: request.retryInSeconds })
-                    : request.data
+                    : data
                       ? t('atsParseCheck.rerun')
                       : t('atsParseCheck.run')}
                 </Button>
@@ -322,8 +350,16 @@ export function ParseCheckPanel({
             error={request.error ? parseCheckErrorMessage(t, request.error) : null}
           />
 
-          {!running && request.data && <ResultsView data={request.data} t={t} />}
-          {resumeId && request.phase === 'idle' && !request.data && (
+          {!running && data && settingsChanged && (
+            <p
+              className="border-2 border-orange-600 bg-orange-100 p-3 font-sans text-sm"
+              data-testid="settings-changed"
+            >
+              {t('atsParseCheck.settingsChanged')}
+            </p>
+          )}
+          {!running && data && <ResultsView data={data} t={t} />}
+          {resumeId && request.phase === 'idle' && !data && (
             <p className="font-sans text-sm text-ink-soft">{t('atsParseCheck.empty')}</p>
           )}
         </div>

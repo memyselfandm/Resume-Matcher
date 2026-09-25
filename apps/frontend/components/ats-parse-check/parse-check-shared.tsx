@@ -2,12 +2,16 @@
 
 import { useTranslations } from '@/lib/i18n';
 
-/** Explains what the parse check measures and what it does not. */
-export function SelfConsistencyNote() {
+/**
+ * Explains what the parse check measures and what it does not. `own` checks a
+ * rendered resume against its source (self-consistency); `upload` has no
+ * source, so only extraction and layout are checked.
+ */
+export function SelfConsistencyNote({ variant }: { variant: 'own' | 'upload' }) {
   const { t } = useTranslations();
   return (
     <p className="border-2 border-blue-700 bg-blue-100 p-3 font-sans text-xs">
-      {t('atsParseCheck.selfConsistency')}
+      {t(variant === 'own' ? 'atsParseCheck.selfConsistency' : 'atsParseCheck.uploadNote')}
     </p>
   );
 }
