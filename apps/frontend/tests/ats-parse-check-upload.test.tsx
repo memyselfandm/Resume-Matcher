@@ -37,7 +37,11 @@ describe('ParseCheckUploadDialog', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText(/never stored/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/Self-consistency check/)).toBeInTheDocument();
+    // Uploads have no source payload: the note describes extraction/layout checks only.
+    expect(
+      within(dialog).getByText(/Deterministic extraction and layout checks/)
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Self-consistency check/)).not.toBeInTheDocument();
     const run = within(dialog).getByRole('button', { name: 'Run parse check' });
     expect(run).toBeDisabled();
 
@@ -74,7 +78,7 @@ describe('ParseCheckUploadDialog', () => {
   it('rejects unsupported and oversized files before uploading', () => {
     render(<ParseCheckUploadDialog open onOpenChange={() => undefined} />);
     choose(new File(['x'], 'photo.png', { type: 'image/png' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('Choose a PDF, DOCX, or DOC file.');
+    expect(screen.getByRole('alert')).toHaveTextContent('Choose a PDF, DOCX or DOC file.');
     expect(screen.getByRole('button', { name: 'Run parse check' })).toBeDisabled();
 
     choose(new File([new Uint8Array(4 * 1024 * 1024 + 1)], 'big.pdf', { type: 'application/pdf' }));
@@ -83,8 +87,8 @@ describe('ParseCheckUploadDialog', () => {
   });
 
   it.each([
-    [413, 'The file is too large. The limit is 4 MB.'],
-    [422, 'The file is not a readable PDF, DOC, or DOCX document.'],
+    [413, 'The file or its unpacked content is too large (upload limit 4 MB).'],
+    [422, 'The file is not a readable PDF, DOCX or DOC document.'],
     [504, 'The parse check timed out.'],
   ])('explains HTTP %i from the upload check', async (status, message) => {
     fetchMock.mockResolvedValue(new Response('{"detail":"x"}', { status }));

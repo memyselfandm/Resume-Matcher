@@ -74,7 +74,7 @@ export interface TemplateParseCheck {
 export interface OwnOutputParseCheck {
   resume_id: string;
   render_locale: string;
-  settings: TemplateSettings & { lang: Locale | null };
+  settings: ParseCheckRequestSettings;
   results: TemplateParseCheck[];
 }
 
@@ -86,6 +86,7 @@ export type ParseCheckErrorKind =
   | 'timeout'
   | 'too_large'
   | 'invalid_file'
+  | 'invalid_settings'
   | 'not_found'
   | 'not_ready'
   | 'renderer_unavailable'
@@ -144,7 +145,10 @@ function kindForStatus(status: number): ParseCheckErrorKind {
   }
 }
 
-async function errorFromResponse(response: Response): Promise<ParseCheckError> {
+async function errorFromResponse(
+  response: Response,
+  overrides: Partial<Record<number, ParseCheckErrorKind>> = {}
+): Promise<ParseCheckError> {
   const text = await response.text().catch(() => '');
   const message = `Parse check failed (status ${response.status}): ${text}`;
   if (response.status === 429) {
@@ -155,10 +159,14 @@ async function errorFromResponse(response: Response): Promise<ParseCheckError> {
       parseRetryAfter(response.headers.get('Retry-After'))
     );
   }
-  return new ParseCheckError(kindForStatus(response.status), message, response.status);
+  const kind = overrides[response.status] ?? kindForStatus(response.status);
+  return new ParseCheckError(kind, message, response.status);
 }
 
-async function send(request: () => Promise<Response>): Promise<Response> {
+async function send(
+  request: () => Promise<Response>,
+  overrides: Partial<Record<number, ParseCheckErrorKind>> = {}
+): Promise<Response> {
   let response: Response;
   try {
     response = await request();
@@ -169,7 +177,7 @@ async function send(request: () => Promise<Response>): Promise<Response> {
     const kind = message.toLowerCase().includes('timed out') ? 'timeout' : 'network';
     throw new ParseCheckError(kind, message);
   }
-  if (!response.ok) throw await errorFromResponse(response);
+  if (!response.ok) throw await errorFromResponse(response, overrides);
   return response;
 }
 
@@ -196,24 +204,65 @@ export interface ResumeParseCheckOptions {
   signal?: AbortSignal;
 }
 
+export type ParseCheckRequestSettings = TemplateSettings & { lang: Locale | null };
+
+/**
+ * The template settings the endpoint accepts, and nothing else: the backend
+ * rejects unknown fields (422), so stale or future keys from localStorage must
+ * not be forwarded.
+ */
+export function toRequestSettings(
+  settings: TemplateSettings,
+  lang: Locale | null = null
+): ParseCheckRequestSettings {
+  return {
+    template: settings.template,
+    pageSize: settings.pageSize,
+    margins: {
+      top: settings.margins.top,
+      bottom: settings.margins.bottom,
+      left: settings.margins.left,
+      right: settings.margins.right,
+    },
+    spacing: {
+      section: settings.spacing.section,
+      item: settings.spacing.item,
+      lineHeight: settings.spacing.lineHeight,
+    },
+    fontSize: {
+      base: settings.fontSize.base,
+      headerScale: settings.fontSize.headerScale,
+      headerFont: settings.fontSize.headerFont,
+      bodyFont: settings.fontSize.bodyFont,
+    },
+    compactMode: settings.compactMode,
+    showContactIcons: settings.showContactIcons,
+    accentColor: settings.accentColor,
+    lang,
+  };
+}
+
 /** Parse-check a stored resume exactly as its PDF download renders it. */
 export async function parseCheckResume(
   resumeId: string,
   options: ResumeParseCheckOptions
 ): Promise<OwnOutputParseCheck> {
   const body = {
-    settings: { ...options.settings, lang: options.lang ?? null },
+    settings: toRequestSettings(options.settings, options.lang ?? null),
     all_templates: options.allTemplates ?? false,
     ...(options.contentLanguage ? { content_language: options.contentLanguage } : {}),
   };
   const endpoint = `/resumes/${encodeURIComponent(resumeId)}/parse-check`;
-  const response = await send(() =>
-    apiFetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: options.signal,
-    })
+  const response = await send(
+    () =>
+      apiFetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: options.signal,
+      }),
+    // Here 422 means the settings or language were rejected, not the file.
+    { 422: 'invalid_settings' }
   );
   return (await response.json()) as OwnOutputParseCheck;
 }
