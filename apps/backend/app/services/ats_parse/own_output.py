@@ -3,7 +3,7 @@
 "Own output" is exactly what ``GET /api/v1/resumes/{id}/pdf`` returns for a
 full template settings object. The PDF and the payload the print page renders
 (``GET /api/v1/resumes?resume_id=`` -> ``processed_resume``) are fetched
-through the in-process ASGI bridge, so the render path, its validation, and
+through the in-process API client, so the render path, its validation, and
 its print URL are the ones users download, with no copy of either.
 
 Renderer admission is fail-fast (``PDFRenderOverloadedError`` -> 503), never
@@ -17,8 +17,9 @@ are sequential, so it holds at most one renderer slot. Its renders are marked
 as background work (``pdf.background_renders``): after a user download is
 refused as busy, the check starts no render for ``DOWNLOAD_PRIORITY_SECONDS``,
 so a user who retries within that window gets the slot instead of the next
-template. With ``PDF_MAX_CONCURRENCY=1`` the check also never retries a busy
-renderer, since the only slot is then held by a user download.
+template. With ``PDF_MAX_CONCURRENCY=1`` the only slot, when busy, is held by
+a user download, so instead of failing after three attempts the check polls
+every ``SINGLE_SLOT_POLL_SECONDS`` until the slot frees or the budget runs out.
 """
 
 from __future__ import annotations
@@ -52,6 +53,9 @@ SINGLE_TEMPLATE_BUDGET_SECONDS = 60.0
 ALL_TEMPLATES_BUDGET_SECONDS = 200.0
 MAX_RENDER_ATTEMPTS = 3
 RENDER_RETRY_BACKOFF_SECONDS = (1.0, 2.0)
+# With a single renderer slot, a busy renderer is polled at this interval
+# until the budget runs out (a user render holds it for a bounded time).
+SINGLE_SLOT_POLL_SECONDS = 1.0
 # Budget kept for extraction after the last render of a template.
 MIN_ANALYSIS_SECONDS = 5.0
 # Extraction is not started with less time than this left.
@@ -222,12 +226,15 @@ async def _render_with_retry(
 ) -> tuple[bytes | None, int, TemplateError | None]:
     """Render one template; retry only a busy renderer, within the budget.
 
-    With a single renderer slot a busy renderer is not retried: the slot is
-    in use by a user download (this check renders sequentially).
+    A busy renderer is retried ``MAX_RENDER_ATTEMPTS`` times with backoff, or,
+    with a single renderer slot (then held by a user download), polled until
+    it frees. Every attempt first yields to recently refused user downloads.
     """
-    attempts_allowed = MAX_RENDER_ATTEMPTS if pdf.render_capacity() > 1 else 1
+    single_slot = pdf.render_capacity() == 1
     error: TemplateError | None = None
-    for attempt in range(1, attempts_allowed + 1):
+    attempt = 0
+    while True:
+        attempt += 1
         if not await _yield_to_downloads(deadline, sleep):
             return None, attempt - 1, error or "budget_exhausted"
         remaining = deadline - time.monotonic() - MIN_ANALYSIS_SECONDS
@@ -248,12 +255,15 @@ async def _render_with_retry(
             error = _render_error_code(exc)
             if error != "render_busy":
                 return None, attempt, error
-        if attempt < attempts_allowed:
+        if single_slot:
+            backoff = SINGLE_SLOT_POLL_SECONDS
+        elif attempt < MAX_RENDER_ATTEMPTS:
             backoff = RENDER_RETRY_BACKOFF_SECONDS[attempt - 1]
-            if deadline - time.monotonic() - MIN_ANALYSIS_SECONDS <= backoff:
-                return None, attempt, error
-            await sleep(backoff)
-    return None, attempts_allowed, error
+        else:
+            return None, attempt, error
+        if deadline - time.monotonic() - MIN_ANALYSIS_SECONDS <= backoff:
+            return None, attempt, error
+        await sleep(backoff)
 
 
 def _failed(

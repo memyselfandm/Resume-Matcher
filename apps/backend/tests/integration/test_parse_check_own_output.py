@@ -423,24 +423,58 @@ async def test_concurrent_own_output_check_is_429(client: AsyncClient, resume_id
     assert responses["after"].status_code == 200  # the slot is released
 
 
-async def test_single_renderer_slot_is_not_busy_retried(
+async def test_single_renderer_slot_is_polled_until_the_budget_runs_out(
     client: AsyncClient, resume_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(pdf, "_PDF_MAX_CONCURRENCY", 1)
-
-    def overload_modern(template: str, attempt: int) -> Exception | None:
-        return PDFRenderOverloadedError(RENDER_BUSY_MESSAGE) if template == "modern" else None
-
+    monkeypatch.setattr(own_output, "SINGLE_SLOT_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(own_output, "MIN_ANALYSIS_SECONDS", 0.2)
+    monkeypatch.setattr(own_output, "SINGLE_TEMPLATE_BUDGET_SECONDS", 1.0)
     calls: list[str] = []
-    with patch("app.routers.resumes.render_resume_pdf", _fixture_render(calls, overload_modern)):
+    always_busy = _fixture_render(calls, lambda *_: PDFRenderOverloadedError(RENDER_BUSY_MESSAGE))
+    with patch("app.routers.resumes.render_resume_pdf", always_busy):
         async with client:
-            response = await client.post(
+            response = await client.post(f"/api/v1/resumes/{resume_id}/parse-check", json={})
+    assert response.status_code == 503
+    # Polled past the three attempts a shared renderer gets.
+    assert len(calls) > own_output.MAX_RENDER_ATTEMPTS
+
+
+async def test_sweep_waits_for_a_user_download_holding_the_only_slot(
+    client: AsyncClient, resume_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PDF_MAX_CONCURRENCY=1 and a user render in progress when the sweep starts."""
+    monkeypatch.setattr(pdf, "_PDF_MAX_CONCURRENCY", 1)
+    monkeypatch.setattr(pdf, "_last_download_refusal", None)
+    monkeypatch.setattr(pdf, "_browser_is_connected", lambda browser: True)
+    monkeypatch.setattr(own_output, "SINGLE_SLOT_POLL_SECONDS", 0.05)
+    user_rendering = anyio.Event()
+
+    async def shared_browser_render(url: str, *args: Any) -> bytes:
+        if not pdf._background_render.get():
+            user_rendering.set()
+            await anyio.sleep(0.5)
+        return render_pdf(_query(url)["template"])
+
+    monkeypatch.setattr(pdf, "_render_on_shared_browser", shared_browser_render)
+    responses: dict[str, Any] = {}
+
+    async def download() -> None:
+        responses["user"] = await client.get(f"/api/v1/resumes/{resume_id}/pdf")
+
+    async with client:
+        async with anyio.create_task_group() as group:
+            group.start_soon(download)
+            await user_rendering.wait()
+            responses["sweep"] = await client.post(
                 f"/api/v1/resumes/{resume_id}/parse-check", json={"all_templates": True}
             )
-    results = {result["template"]: result for result in response.json()["results"]}
-    assert results["modern"]["error"] == "render_busy"
-    assert results["modern"]["render_attempts"] == 1
-    assert sum(1 for call in calls if _query(call)["template"] == "modern") == 1
+
+    assert responses["user"].status_code == 200
+    assert responses["sweep"].status_code == 200
+    results = responses["sweep"].json()["results"]
+    assert [result["status"] for result in results] == ["ok"] * len(TEMPLATE_IDS)
+    assert results[0]["render_attempts"] > 1  # waited for the user's render
 
 
 async def test_user_download_refused_during_a_sweep_gets_the_slot_on_retry(
