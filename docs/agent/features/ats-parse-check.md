@@ -259,12 +259,31 @@ names the way the print page does.
   the template's render order.
 - Fields in hidden sections are `hidden`; fields a template does not print are
   `not_rendered`. Neither counts against recall.
-- Custom sections follow the templates' rules: one is printed only when its
-  `sectionMeta` entry has a falsy `isDefault`, and then only the content of
-  its meta `sectionType` (items, strings, or text), with its heading only when
-  that content is non-empty. Anything else is `not_rendered`. Note that the
-  backend `SectionMeta` model defaults `isDefault` to `true`, so a custom
-  section saved without the flag is silently left out of the PDF.
+- Custom sections follow the templates' rules: one is printed only when it
+  has a `sectionMeta` entry with a falsy `isDefault`, and then only the
+  content of its meta `sectionType` (items, strings, or text), with its
+  heading only when that content is non-empty. Anything else, including a
+  `customSections` key with no `sectionMeta` entry, is `not_rendered`.
+
+Upstream finding (not changed here): custom-section content can be stored and
+then never printed or shown in the builder.
+
+- Upload and wizard parsing: the LLM schema asks for `customSections`
+  (publications, volunteer work, ...) but not for their `sectionMeta`, and
+  `normalize_resume_data` fills a missing `sectionMeta` with the default
+  (built-in) sections only. The builder and all templates iterate
+  `sectionMeta`, so parsed custom sections are silently dropped from the
+  editor and the PDF. Reproduced through `GET /api/v1/resumes` with an
+  upload-shaped `processed_data`.
+- API clients: the backend `SectionMeta` model defaults `isDefault` to
+  `true`, and the templates print a custom section only when `isDefault` is
+  false. A custom meta saved through `PATCH /api/v1/resumes/{id}` without the
+  flag comes back as `isDefault: true` and never renders. The builder's own
+  "add section" dialog sets `isDefault: false`, so UI-created sections are
+  unaffected.
+
+The round trip reports both cases as `not_rendered`, so they are visible in
+the report without counting against recall.
 - At most 1,000 expected fields are compared (`roundtrip.truncated` is then
   `true`), and the check's deadline is enforced per field, so a huge payload
   cannot run past the budget.

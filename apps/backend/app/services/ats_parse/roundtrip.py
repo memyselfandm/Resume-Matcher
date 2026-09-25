@@ -277,6 +277,14 @@ def expected_fields(source: dict[str, Any]) -> list[ExpectedField]:
                 heading_field = replace(heading_field, rendered=False)
             fields.append(heading_field)
         fields.extend(section_fields)
+    # Custom sections without a sectionMeta entry are never printed (the
+    # templates iterate sectionMeta); list their content as not rendered.
+    listed = {str(entry.get("key", "")) for entry in sections}
+    for key in source.get("customSections") or {}:
+        if isinstance(key, str) and key not in listed and key not in _BUILTIN_SECTIONS:
+            fields.extend(
+                replace(field, rendered=False) for field in _section_fields(key, source, False)
+            )
     return [field for field in fields if normalize_text(field.value, source_html=True)]
 
 
