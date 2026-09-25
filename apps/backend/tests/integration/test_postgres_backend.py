@@ -676,7 +676,7 @@ async def test_migration_refuses_api_keys_without_a_data_dir_secret(
 
 
 async def test_startup_skips_the_tinydb_import_on_postgres(
-    isolated_db: Database,
+    isolated_db: Database, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Counterpart of the sqlite_only real-startup TinyDB migration test."""
     from tinydb import TinyDB
@@ -689,7 +689,12 @@ async def test_startup_skips_the_tinydb_import_on_postgres(
         legacy.table("resumes").insert({"resume_id": "legacy", "content": "x"})
     finally:
         legacy.close()
-    async with app.router.lifespan_context(app):
-        assert await isolated_db.get_resume("legacy") is None
+    with caplog.at_level("WARNING", logger="app.main"):
+        async with app.router.lifespan_context(app):
+            assert await isolated_db.get_resume("legacy") is None
+    assert any(
+        record.levelname == "WARNING" and "not imported on PostgreSQL" in record.getMessage()
+        for record in caplog.records
+    )
     assert settings.db_path.exists()
     assert not settings.db_path.with_suffix(".json.migrated").exists()
