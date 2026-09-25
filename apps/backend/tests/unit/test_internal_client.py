@@ -127,4 +127,17 @@ async def test_unhandled_exceptions_are_logged_to_the_callers_logger(
     finally:
         await client.aclose()
     [record] = [r for r in caplog.records if r.name == caller.name and r.exc_info]
-    assert "GET /api/v1/items/broken" in record.getMessage()
+    assert record.getMessage() == "Unhandled exception in internal request GET /api/v1/items/broken"
+
+
+async def test_label_names_the_caller_in_logs(caplog: pytest.LogCaptureFixture) -> None:
+    client = InternalClient(_app(), label="MCP bridge")
+    try:
+        with caplog.at_level(logging.WARNING, logger="app.internal_client"):
+            with pytest.raises(InternalRequestError):
+                await client.request("GET", "/items/broken")
+    finally:
+        await client.aclose()
+    messages = [record.getMessage() for record in caplog.records]
+    assert "Unhandled exception in MCP bridge request GET /api/v1/items/broken" in messages
+    assert "MCP bridge GET /items/broken returned 500" in messages

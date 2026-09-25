@@ -100,7 +100,9 @@ class AppBridge:
     def __init__(self, app: ASGIApp) -> None:
         # Unhandled router exceptions become generic 500s (logged here, never
         # forwarded); route budgets already bound AI calls, so no timeout.
-        self._client = InternalClient(app, base_url=BRIDGE_BASE_URL, log=logger)
+        self._client = InternalClient(
+            app, base_url=BRIDGE_BASE_URL, log=logger, label="MCP bridge"
+        )
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
