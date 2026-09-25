@@ -11,6 +11,7 @@ from app.mcp.tools.ats import (
     _template_settings,
     failing_checks,
     own_output_summary,
+    present_verification,
     report_summary,
     verdict,
 )
@@ -150,7 +151,7 @@ class TestSummaries:
                 ),
             ],
         )
-        vivid, clean = own_output_summary(check_result)
+        vivid, clean = own_output_summary(check_result)["results"]
         assert vivid == {
             "template": "vivid",
             "status": "render_failed",
@@ -158,6 +159,98 @@ class TestSummaries:
             "error": "render_busy",
         }
         assert clean["passes"] is True and "two_column_by_design" not in clean
+        assert "status" not in clean and "failing_checks" not in clean
+
+
+    def test_unknown_check_falls_back_to_id_and_params(self) -> None:
+        checks = [check("future_check", "high", foo=1), check("page_count", "low", pages=3)]
+        assert failing_checks(report(checks)) == [
+            {"id": "future_check", "severity": "high", "params": {"foo": 1}},
+            # page_count's message needs max_pages, which is missing here.
+            {"id": "page_count", "severity": "low", "params": {"pages": 3}},
+        ]
+
+    def test_shared_messages_are_listed_once(self) -> None:
+        def template(name: str, pages: int) -> TemplateParseCheck:
+            checks = [
+                check("multi_column", "medium", expected_by_template=True),
+                check("page_count", "low", pages=pages, max_pages=2),
+            ]
+            return TemplateParseCheck(
+                template=name,
+                status="ok",
+                expected_by_template=True,
+                render_attempts=1,
+                report=report(checks, recall=1.0),
+            )
+
+        summary = own_output_summary(
+            OwnOutputParseCheck(
+                resume_id="r1",
+                render_locale="en",
+                settings=TemplateSettings(),
+                results=[template("swiss-two-column", 3), template("vivid", 4)],
+            )
+        )
+        assert list(summary["messages"]) == ["multi_column"]
+        assert summary["messages"]["multi_column"].endswith(
+            "Expected for the selected two-column template."
+        )
+        first, second = summary["results"]
+        assert first["failing_checks"][0] == {
+            "id": "multi_column",
+            "severity": "medium",
+            "expected_by_template": True,
+        }
+        # Different wording per template stays inline.
+        assert first["failing_checks"][1]["message"].startswith("The resume is 3 pages")
+        assert second["failing_checks"][1]["message"].startswith("The resume is 4 pages")
+
+
+class TestPresentVerification:
+    def stored(self, recall: float) -> dict[str, Any]:
+        check_result = OwnOutputParseCheck(
+            resume_id="t1",
+            render_locale="en",
+            settings=TemplateSettings(),
+            results=[
+                TemplateParseCheck(
+                    template="swiss-single",
+                    status="ok",
+                    expected_by_template=False,
+                    render_attempts=1,
+                    report=report([], recall=recall),
+                )
+            ],
+        )
+        return {
+            "tailored_resume_id": "t1",
+            "application_id": "a1",
+            "source_resume_id": "s1",
+            "job_id": "j1",
+            "template": "swiss-single",
+            "keyword_score": 70.0,
+            "keyword_score_detail": {"overall_score": 70.0},
+            "warnings": [],
+            "report": check_result.model_dump(mode="json"),
+        }
+
+    def test_verdict_follows_the_callers_threshold(self) -> None:
+        stored = self.stored(recall=0.97)
+        lenient = present_verification(stored, detail=False, min_content_recall=0.95)
+        strict = present_verification(stored, detail=False, min_content_recall=0.99)
+        assert (lenient["passes"], strict["passes"]) == (True, False)
+        assert strict["min_content_recall"] == 0.99
+        assert strict["reasons"] == ["content_recall 0.97 is below 0.99"]
+        assert "report" not in lenient and "keyword_score_detail" not in lenient
+        assert "warnings" not in lenient
+
+    def test_detail_adds_the_stored_reports(self) -> None:
+        stored = self.stored(recall=1.0)
+        shown = present_verification(stored, detail=True, min_content_recall=0.95)
+        assert shown["report"] == stored["report"]
+        assert shown["keyword_score_detail"] == {"overall_score": 70.0}
+        assert shown["tailored_resume_id"] == "t1" and shown["application_id"] == "a1"
 
 
 class TestArguments:
