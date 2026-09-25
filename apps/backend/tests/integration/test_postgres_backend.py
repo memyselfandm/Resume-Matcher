@@ -581,6 +581,100 @@ async def test_sqlite_to_postgres_migration_round_trip(
     assert await _snapshot(isolated_db) == expected
 
 
+async def test_migration_writes_absent_json_as_sql_null(
+    isolated_db: Database, tmp_path: Path
+) -> None:
+    sqlite_path = tmp_path / "source.db"
+    source = Database(db_path=sqlite_path)
+    resume = await source.create_resume(content="Unparsed", processed_data=None)
+    async with source._write_session() as session:
+        session.add(
+            TailoringPreview(
+                preview_id="preview-null",
+                source_id=resume["resume_id"],
+                job_id="job-null",
+                payload_hash="p",
+                source_hash="s",
+                job_hash="j",
+                created_at="2026-01-01T00:00:00+00:00",
+                expires_at="2026-01-02T00:00:00+00:00",
+                improvements=None,
+                response_data=None,
+            )
+        )
+        await session.commit()
+    await source.close()
+    assert isolated_db.database_url is not None
+
+    await asyncio.to_thread(pg_migration.migrate, sqlite_path, isolated_db.database_url)
+
+    async with isolated_db._session() as session:
+        for table, column in (
+            ("resumes", "processed_data"),
+            ("tailoring_previews", "improvements"),
+            ("tailoring_previews", "response_data"),
+        ):
+            assert (
+                await session.scalar(
+                    text(f"SELECT count(*) FROM {table} WHERE {column} IS NULL")
+                )
+            ) == 1, f"{table}.{column} was not written as SQL NULL"
+
+
+async def test_migration_refuses_api_keys_the_data_dir_secret_cannot_read(
+    isolated_db: Database, tmp_path: Path
+) -> None:
+    from cryptography.fernet import Fernet
+
+    sqlite_path = tmp_path / "source.db"
+    source = Database(db_path=sqlite_path)
+    await source.create_resume(content="Resume")
+    foreign = Fernet(Fernet.generate_key()).encrypt(b"sk-other-install").decode()
+    source.set_api_key_ciphertext("openai", foreign)
+    await source.close()
+    crypto.encrypt("x")  # DATA_DIR holds a secret, just not the one used above.
+    assert isolated_db.database_url is not None
+
+    with pytest.raises(pg_migration.ApiKeySecretError, match="None of 1 API keys"):
+        await asyncio.to_thread(
+            pg_migration.migrate, sqlite_path, isolated_db.database_url
+        )
+    assert await isolated_db.list_resumes() == []  # rolled back
+    assert isolated_db.get_api_key_ciphertexts() == {}
+
+    exit_code = await asyncio.to_thread(
+        pg_migration.main,
+        [
+            "--sqlite", str(sqlite_path),
+            "--database-url", isolated_db.database_url,
+            "--allow-undecryptable-keys",
+        ],
+    )
+    assert exit_code == 0
+    assert isolated_db.get_api_key_ciphertexts() == {"openai": foreign}
+
+
+async def test_migration_refuses_api_keys_without_a_data_dir_secret(
+    isolated_db: Database, tmp_path: Path
+) -> None:
+    from app.config import settings
+
+    sqlite_path = tmp_path / "source.db"
+    source = Database(db_path=sqlite_path)
+    source.set_api_key_ciphertext("openai", crypto.encrypt("sk-synthetic"))
+    await source.close()
+    (settings.data_dir / ".secret_key").unlink()
+    crypto.reset_cache()
+    assert isolated_db.database_url is not None
+
+    with pytest.raises(pg_migration.ApiKeySecretError, match="no secret at"):
+        await asyncio.to_thread(
+            pg_migration.migrate, sqlite_path, isolated_db.database_url
+        )
+    assert not (settings.data_dir / ".secret_key").exists()  # never generated
+    assert isolated_db.get_api_key_ciphertexts() == {}
+
+
 async def test_startup_skips_the_tinydb_import_on_postgres(
     isolated_db: Database,
 ) -> None:
