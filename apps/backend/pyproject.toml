@@ -59,8 +59,9 @@ addopts = [
     "-v",
     # Exclude LLM-as-judge evals from the default run (they may call a real
     # provider and are non-deterministic). Run them on demand with `-m eval`.
+    # Real-Chromium PDF tests need a running frontend; run them with `-m pdf`.
     "-m",
-    "not eval",
+    "not eval and not pdf",
 ]
 markers = [
     "unit: pure function tests, no external dependencies",
@@ -68,4 +69,5 @@ markers = [
     "integration: API endpoint tests with httpx AsyncClient",
     "eval: prompt-quality evaluations; may call a real LLM, skipped without a configured key",
     "e2e: end-to-end tests against running servers; skipped unless their environment variables are set",
+    "pdf: real Chromium renders through a running frontend (opt-in, `-m pdf`)",
 ]

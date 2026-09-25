@@ -2,13 +2,19 @@
 
 import copy
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from app.services.ats_parse.extract import extract_document
-from app.services.ats_parse.roundtrip import compute_roundtrip, expected_fields
+from app.services.ats_parse.extract import MAX_EXTRACTED_CHARS, extract_document
+from app.services.ats_parse.roundtrip import (
+    MAX_ROUNDTRIP_FIELDS,
+    compute_roundtrip,
+    expected_fields,
+    order_fields,
+)
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "ats_parse"
 
@@ -164,3 +170,133 @@ def test_repeated_employer_entries_each_anchor_to_their_own_text(
     result = compute_roundtrip(source, text)
     assert result.content_recall == 1.0
     assert {field.status for field in result.fields} == {"found"}
+
+
+def _two_entry_source(first_bullets: list[str]) -> dict[str, Any]:
+    return {
+        "personalInfo": {"name": "Ada Example"},
+        "workExperience": [
+            {"title": "Senior Engineer", "company": "Google", "years": "2021 - 2023",
+             "description": first_bullets},
+            {"title": "Engineer", "company": "Google", "years": "2018 - 2021",
+             "description": ["Maintained index services."]},
+        ],
+    }
+
+
+def _two_entry_text(first_bullets: list[str]) -> str:
+    return (
+        "Ada Example\nSenior Engineer 2021 - 2023\nGoogle\n"
+        + "\n".join(first_bullets)
+        + "\nEngineer 2018 - 2021\nGoogle\nMaintained index services."
+    )
+
+
+@pytest.mark.parametrize(
+    "bullets",
+    [
+        # The next entry's employer inside the last bullet.
+        ["Built search ranking pipelines.", "Shipped features for Google Maps"],
+        # The next entry's title and employer at the start of a bullet.
+        ["Engineer tooling for Google teams", "Built search ranking pipelines."],
+    ],
+)
+def test_bullet_naming_next_entry_does_not_move_its_anchor(bullets: list[str]) -> None:
+    result = compute_roundtrip(_two_entry_source(bullets), _two_entry_text(bullets))
+    assert {field.status for field in result.fields} == {"found"}
+    assert result.content_recall == 1.0
+
+
+def test_bullet_naming_next_entry_in_company_first_layout() -> None:
+    """Templates such as latex print the company before the title."""
+    bullets = ["Built search ranking pipelines.", "Shipped features for Google Maps"]
+    text = (
+        "Ada Example\nGoogle 2021 - 2023\nSenior Engineer\n"
+        + "\n".join(bullets)
+        + "\nGoogle 2018 - 2021\nEngineer\nMaintained index services."
+    )
+    result = compute_roundtrip(_two_entry_source(bullets), text)
+    assert {field.status for field in result.fields} == {"found"}
+
+
+def test_missing_company_is_not_masked_by_an_identical_entry() -> None:
+    source = {
+        "personalInfo": {"name": "Ada Example"},
+        "workExperience": [
+            {"title": "Engineer", "company": "Google", "years": year,
+             "description": ["Built search ranking pipelines."]}
+            for year in ("2021 - 2023", "2018 - 2021")
+        ],
+    }
+    text = (
+        "Ada Example\nEngineer 2021 - 2023\nBuilt search ranking pipelines.\n"
+        "Engineer 2018 - 2021\nGoogle\nBuilt search ranking pipelines."
+    )
+    flagged = {
+        field.field: field.status
+        for field in compute_roundtrip(source, text).fields
+        if field.status != "found"
+    }
+    assert flagged == {"workExperience[0].company": "missing"}
+
+
+def test_fixed_layout_order_is_the_template_order(source: dict[str, Any]) -> None:
+    """Two-column templates print education in the sidebar, after the main column."""
+    fields = order_fields(
+        expected_fields(source),
+        body_order=("summary", "workExperience", "additional.technicalSkills", "education"),
+    )
+    groups = list(dict.fromkeys(field.group for field in fields))
+    assert groups.index("additional.technicalSkills") < groups.index("education")
+    assert groups[0].startswith("personalInfo.")
+
+
+def test_custom_item_kinds_do_not_include_the_section_key() -> None:
+    source = {
+        "sectionMeta": [
+            {"id": "pubs", "key": "pubs", "displayName": "Publications", "isVisible": True, "order": 1}
+        ],
+        "customSections": {"pubs": {"sectionType": "itemList", "items": [{"title": "Paper"}]}},
+    }
+    kinds = {field.path: field.kind for field in expected_fields(source)}
+    assert kinds["customSections.pubs[0].title"] == "customSections.title"
+
+
+def _huge_source(bullets: int) -> tuple[dict[str, Any], str]:
+    descriptions = [
+        f"Delivered project {index} for client team {index * 7} with outcome {index * 3} percent"
+        for index in range(bullets)
+    ]
+    source = {
+        "personalInfo": {"name": "Ada Example"},
+        "workExperience": [
+            {"title": "Engineer", "company": "Acme", "years": "2020 - 2024",
+             "description": descriptions}
+        ],
+    }
+    text = "Ada Example\nEngineer Acme 2020 - 2024\n" + "\n".join(
+        line if index % 2 else "unrelated words" for index, line in enumerate(descriptions)
+    )
+    return source, text[:MAX_EXTRACTED_CHARS]
+
+
+def test_huge_source_is_capped_and_marked_truncated() -> None:
+    source, text = _huge_source(5_000)
+    started = time.monotonic()
+    result = compute_roundtrip(source, text, deadline=started + 60)
+    assert result.truncated is True
+    assert len(result.fields) == MAX_ROUNDTRIP_FIELDS
+    assert time.monotonic() - started < 30
+
+
+def test_small_source_is_not_truncated(source: dict[str, Any], rendered_text: str) -> None:
+    assert compute_roundtrip(source, rendered_text).truncated is False
+
+
+def test_round_trip_stops_at_the_deadline() -> None:
+    source, text = _huge_source(5_000)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        compute_roundtrip(source, text, deadline=started + 0.2)
+    # The deadline is checked per field, including inside an entry's bullets.
+    assert time.monotonic() - started < 1.5

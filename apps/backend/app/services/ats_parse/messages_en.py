@@ -98,6 +98,7 @@ PASS_MESSAGES: dict[str, str] = {
 }
 
 NOT_APPLICABLE_MESSAGE = "Not applicable ({reason})."
+EXPECTED_BY_TEMPLATE_MESSAGE = "Expected for the selected two-column template."
 
 
 def _format_value(value: Any) -> str:
@@ -112,4 +113,7 @@ def render_message(check: CheckResult) -> str:
     if check.status == "not_applicable":
         return NOT_APPLICABLE_MESSAGE.format(reason=params.get("reason", "n/a"))
     catalog = FAIL_MESSAGES if check.status == "fail" else PASS_MESSAGES
-    return catalog[check.id].format(**params)
+    message = catalog[check.id].format(**params)
+    if check.status == "fail" and check.params.get("expected_by_template") is True:
+        message = f"{message} {EXPECTED_BY_TEMPLATE_MESSAGE}"
+    return message

@@ -31,12 +31,14 @@ import time
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import median
 from typing import Any, Literal
 
 from docx import Document
 from pdfminer.converter import PDFPageAggregator
 from pdfminer.layout import (
     LAParams,
+    LTChar,
     LTComponent,
     LTContainer,
     LTImage,
@@ -74,6 +76,11 @@ _DEADLINE_CHECK_INTERVAL = 256
 
 # Layout analysis results depend on these values, so they are pinned rather
 # than inherited from pdfminer defaults that may change between releases.
+# ``word_margin`` only affects pdfminer's own ``get_text``; line text is built
+# by ``_line_text`` with a line-relative word-gap threshold instead.
+# ``all_texts`` also groups text drawn inside form XObjects (LTFigure) into
+# lines: Chromium draws semi-transparent text (CSS ``opacity``, e.g. the vivid
+# template's surname) inside one, and text extractors do read it.
 PINNED_LAPARAMS = LAParams(
     line_overlap=0.5,
     char_margin=2.0,
@@ -81,7 +88,7 @@ PINNED_LAPARAMS = LAParams(
     word_margin=0.1,
     boxes_flow=None,
     detect_vertical=False,
-    all_texts=False,
+    all_texts=True,
 )
 
 SUPPORTED_SUFFIXES: dict[str, FileFormat] = {
@@ -221,27 +228,119 @@ def _round(value: float) -> float:
     return round(value, 2)
 
 
+# Word breaks. A gap between two glyphs, in units of the next glyph's size
+# (``max(width, height)``, as pdfminer measures ``word_margin``), is a word
+# break when it exceeds the line's typical inter-glyph gap by this much.
+# Chromium often draws words without space glyphs, so the gap is the only
+# signal. Measured against the line's typical gap on the real template renders
+# (Linux and macOS) and the synthetic fixtures, gaps inside words (kerning,
+# letter spacing) reach 0.11 and the narrowest gap between words is 0.19
+# (``University |``, the separator drawn as its own span).
+WORD_GAP_RATIO = 0.15
+# The typical gap is the line's median inter-glyph gap, taken from lines with
+# at least this many glyph pairs and capped, so letter-spaced text (e.g. CSS
+# ``letter-spacing: 0.12em`` headings) is not split into letters while an
+# ordinary line keeps the absolute threshold.
+TYPICAL_GAP_MIN_PAIRS = 4
+TYPICAL_GAP_MAX_RATIO = 0.25
+
+# A glyph whose baseline rises more than this per unit of advance is rotated
+# (pdfminer's ``upright`` only means "not mirrored").
+ROTATION_TOLERANCE = 0.01
+
+
+def _is_rotated(line: LTTextLine) -> bool:
+    """Whether a line has glyphs drawn with a rotated baseline (e.g. a watermark).
+
+    Only the baseline direction (``b`` against ``a`` of the glyph matrix)
+    counts. A horizontal shear (``c``) is synthetic italic: Chromium on Linux
+    slants fonts without an italic face that way, and that text stays in its
+    row.
+
+    The matrix includes the page's ``/Rotate`` (pdfminer applies it to the
+    CTM), so rotation is judged as displayed: a landscape page drawn to
+    display upright is analyzed normally. Text that displays sideways, such
+    as upright content on a ``/Rotate 90`` or ``270`` page, is unsupported for
+    layout analysis: pdfminer lays it out one glyph per line, and every such
+    line counts as rotated.
+    """
+    for char in line:
+        if isinstance(char, LTChar):
+            a, b, _, _, _, _ = char.matrix
+            if abs(b) > ROTATION_TOLERANCE * max(abs(a), 1e-9):
+                return True
+    return False
+
+
+def _glyph_gap(left: LTChar, right: LTChar) -> float:
+    return (right.x0 - left.x1) / max(right.width, right.height, 1e-9)
+
+
+def _line_text(line: LTTextLine) -> str:
+    """Text of a horizontal line, with word breaks judged against the line.
+
+    pdfminer's ``word_margin`` is one absolute threshold, so kerning gaps in
+    tightly set capitals ("EDUCAT ION", "PostgreSQ L") and uniform letter
+    spacing ("S U M M A R Y") read as word breaks that pdftotext and ATS
+    extractors do not see. Here a gap breaks a word only when it exceeds the
+    line's typical gap by ``WORD_GAP_RATIO``; drawn space glyphs are kept.
+    """
+    chars = [char for char in line if isinstance(char, LTChar)]
+    gaps = [
+        _glyph_gap(left, right)
+        for left, right in zip(chars, chars[1:])
+        if not left.get_text().isspace() and not right.get_text().isspace()
+    ]
+    typical = 0.0
+    if len(gaps) >= TYPICAL_GAP_MIN_PAIRS:
+        typical = min(max(median(gaps), 0.0), TYPICAL_GAP_MAX_RATIO)
+    parts: list[str] = []
+    previous: LTChar | None = None
+    for char in chars:
+        text = char.get_text()
+        if (
+            previous is not None
+            and not text.isspace()
+            and not previous.get_text().isspace()
+            and _glyph_gap(previous, char) > typical + WORD_GAP_RATIO
+        ):
+            parts.append(" ")
+        parts.append(text)
+        previous = char
+    return "".join(parts)
+
+
 def _walk_layout(
     item: LTComponent,
     lines: list[TextLine],
     images: list[tuple[float, float]],
+    rotated: list[str],
 ) -> None:
-    """Collect text lines and raster images in pdfminer's reading order."""
+    """Collect text lines and raster images in pdfminer's reading order.
+
+    Rotated lines (diagonal watermarks, vertical side labels) keep their text
+    in ``rotated`` but never join ``lines``: their bounding box spans the
+    page diagonally, which would block every gutter band and scramble rows.
+    """
     if isinstance(item, LTTextLine):
-        text = item.get_text().replace("\n", " ").strip()
-        if text:
-            lines.append(
-                TextLine(
-                    _round(item.x0), _round(item.y0), _round(item.x1), _round(item.y1), text
-                )
-            )
+        if _is_rotated(item):
+            text = item.get_text().replace("\n", " ").strip()
+            if text:
+                rotated.append(text)
+            return
+        text = _line_text(item).replace("\n", " ").strip()
+        if not text:
+            return
+        lines.append(
+            TextLine(_round(item.x0), _round(item.y0), _round(item.x1), _round(item.y1), text)
+        )
         return
     if isinstance(item, LTImage):
         images.append((_round(item.width), _round(item.height)))
         return
     if isinstance(item, (LTTextBox, LTContainer)):
         for child in item:
-            _walk_layout(child, lines, images)
+            _walk_layout(child, lines, images, rotated)
 
 
 def reconstruct_rows(lines: list[TextLine]) -> list[str]:
@@ -314,11 +413,13 @@ def _extract_pdf(content: bytes, deadline: float | None) -> ExtractedDocument:
                 continue
             layout: LTPage = device.get_result()
             lines: list[TextLine] = []
+            rotated: list[str] = []
             images: list[tuple[float, float]] = []
             for item in layout:
-                _walk_layout(item, lines, images)
+                _walk_layout(item, lines, images, rotated)
             page_chars = 0
-            for row in reconstruct_rows(lines):
+            # Rotated text follows the page's rows, as its own rows.
+            for row in [*reconstruct_rows(lines), *rotated]:
                 remaining = MAX_EXTRACTED_CHARS - char_total
                 if remaining <= 0:
                     truncated_chars = True

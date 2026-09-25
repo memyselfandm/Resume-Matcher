@@ -40,6 +40,11 @@ EMAIL_RE = re.compile(
 )
 _PHONE_CANDIDATE_RE = re.compile(r"(?<![\d+])\+?\d[\d \t().\-]{6,80}\d(?!\d)")
 _DIGIT_GROUP_RE = re.compile(r"\d{1,15}")
+# A number labeled as an ISBN ("ISBN 978-3-16-148410-0", "ISBN-13: ...") is a
+# publication id, not a phone. Only the few characters before a candidate are
+# inspected, so the check stays linear.
+_ISBN_PREFIX_RE = re.compile(r"isbn(?:[- ]?1[03])?\s{0,2}:?\s{0,3}$", re.IGNORECASE)
+ISBN_PREFIX_WINDOW = 12
 PHONE_MIN_DIGITS = 10
 PHONE_MAX_DIGITS = 15
 LINKEDIN_RE = re.compile(r"linkedin\.com/(?:in|pub)/[\w\-%.]{1,100}", re.IGNORECASE)
@@ -195,17 +200,37 @@ def _is_date_like(groups: list[str]) -> bool:
     return years >= 2 and years + months == len(groups)
 
 
+def _isbn_group_count(groups: list[str]) -> int:
+    """Leading digit groups that form the ISBN after an "ISBN" label.
+
+    ISBN-13 (978/979 prefix) has 13 digits, ISBN-10 has 10 (its check digit
+    may be ``X``, which ends the candidate). If the groups do not add up to an
+    ISBN exactly, the whole candidate is treated as the ISBN.
+    """
+    length = 13 if "".join(groups)[:3] in ("978", "979") else 10
+    digits = 0
+    for index, group in enumerate(groups):
+        digits += len(group)
+        if digits == length:
+            return index + 1
+        if digits > length:
+            break
+    return len(groups)
+
+
 def has_phone(text: str) -> bool:
     """Whether text contains a phone number (10-15 digits, not a date range).
 
     A candidate is a bounded run of digits and phone separators. Every
     contiguous run of its digit groups is tested, so a phone followed by a
     date range ("555-555-0100 2019 - 2023") is still found, while runs made
-    only of years and months are rejected.
+    only of years and months are rejected, as are numbers labeled "ISBN".
     """
     for match in _PHONE_CANDIDATE_RE.finditer(text):
         groups = _DIGIT_GROUP_RE.findall(match.group(0))
-        for first in range(len(groups)):
+        prefix = text[max(0, match.start() - ISBN_PREFIX_WINDOW) : match.start()]
+        skip = _isbn_group_count(groups) if _ISBN_PREFIX_RE.search(prefix) else 0
+        for first in range(skip, len(groups)):
             digits = 0
             for last in range(first, len(groups)):
                 digits += len(groups[last])

@@ -285,6 +285,7 @@ class TestContactPatterns:
             "555.010.4477",
             "555-555-0100 2019 - 2023",
             "2019 - 2023 555-555-0100",
+            "ISBN 978-3-16-148410-0 555-555-0100",
         ],
     )
     def test_phone_numbers_are_detected(self, text: str) -> None:
@@ -302,6 +303,9 @@ class TestContactPatterns:
             "2019.04 - 2021.03",
             "2019-04 - 2021-03",
             "2019/04 - 2021/03",
+            "ISBN 978-3-16-148410-0",
+            "ISBN-13: 978-3-16-148410-0",
+            "isbn 0-306-40615-2",
         ],
     )
     def test_year_ranges_and_short_numbers_are_not_phones(self, text: str) -> None:
