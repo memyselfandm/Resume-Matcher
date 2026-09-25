@@ -33,8 +33,26 @@ from app.db_engine import normalize_database_url  # noqa: E402
 # Opt-in PostgreSQL run: TEST_DATABASE_URL=postgresql+psycopg://... uv run pytest
 # Each test gets its own schema (selected through ``search_path`` on both
 # engines), dropped afterwards. Unset keeps the default temp-file SQLite run.
+#
+# Hang guards for the (possibly remote) test server. Without them libpq waits
+# indefinitely on a server that stops answering (connect has no deadline and
+# a dead connection is only noticed after the OS keepalive idle time, about
+# two hours), so a network drop stalls the whole run with no error.
+_POSTGRES_CLIENT_GUARDS = {
+    "connect_timeout": "10",
+    "keepalives_idle": "10",
+    "keepalives_interval": "5",
+    "keepalives_count": "3",
+}
+# Server-side bounds for anything a test leaves waiting or open. The app's own
+# 5s lock_timeout still applies (it precedes these options).
+_POSTGRES_SERVER_GUARDS = (
+    "-c statement_timeout=60s -c idle_in_transaction_session_timeout=60s"
+)
 _TEST_DATABASE_URL = (
-    normalize_database_url(os.environ["TEST_DATABASE_URL"])
+    make_url(normalize_database_url(os.environ["TEST_DATABASE_URL"]))
+    .update_query_dict(_POSTGRES_CLIENT_GUARDS)
+    .render_as_string(hide_password=False)
     if os.environ.get("TEST_DATABASE_URL", "").strip()
     else None
 )
@@ -55,6 +73,9 @@ def _postgres_admin(statement: str) -> None:
             max_overflow=0,
             pool_pre_ping=True,
             isolation_level="AUTOCOMMIT",
+            # DROP SCHEMA waits for every lock on the schema's tables; a
+            # session a test leaked must fail the run, not stall it.
+            connect_args={"options": f"-c lock_timeout=30s {_POSTGRES_SERVER_GUARDS}"},
         )
     with _postgres_admin_engine.connect() as connection:
         connection.exec_driver_sql(statement)
@@ -65,7 +86,9 @@ def postgres_schema_url(schema: str) -> str:
     assert _TEST_DATABASE_URL is not None
     return (
         make_url(_TEST_DATABASE_URL)
-        .update_query_dict({"options": f"-c search_path={schema}"})
+        .update_query_dict(
+            {"options": f"-c search_path={schema} {_POSTGRES_SERVER_GUARDS}"}
+        )
         .render_as_string(hide_password=False)
     )
 
