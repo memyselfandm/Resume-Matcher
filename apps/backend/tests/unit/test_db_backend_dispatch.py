@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.schema import CreateIndex, CreateTable
 
 from app.database import (
-    POSTGRES_WRITER_LOCK_KEY,
+    POSTGRES_WRITER_LOCK_ARGS,
     Database,
     DatabaseBusyError,
     _translate_write_errors,
@@ -79,7 +79,7 @@ def test_database_url_selects_postgres_without_touching_the_filesystem(
     ).render_as_string(hide_password=False)
     assert not (tmp_path / "unused").exists()
     assert str(database._reserve_writer) == (
-        f"SELECT pg_advisory_xact_lock({POSTGRES_WRITER_LOCK_KEY})"
+        f"SELECT pg_advisory_xact_lock({POSTGRES_WRITER_LOCK_ARGS})"
     )
 
 

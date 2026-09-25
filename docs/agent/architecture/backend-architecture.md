@@ -112,7 +112,7 @@ keeps exactly one default while any master exists: a new master becomes the defa
 exists, deleting the default promotes the earliest remaining master, and the startup migration
 (`db_engine.py`) promotes the earliest master when none is default. Master creation and
 default changes, and tracker read-modify-write operations, reserve the writer
-(`BEGIN IMMEDIATE` on SQLite, a global `pg_advisory_xact_lock` on PostgreSQL),
+(`BEGIN IMMEDIATE` on SQLite, a per-schema `pg_advisory_xact_lock` on PostgreSQL),
 including across Database instances. ISO-8601 timestamp columns use the `C`
 collation on PostgreSQL so lexical comparison stays byte order.
 **Jobs' dynamic fields** (`job_keywords`, `job_keywords_hash`, `company`/`role`,

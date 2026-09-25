@@ -24,7 +24,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapper, Session
 
 from app import crypto
-from app.database import POSTGRES_WRITER_LOCK_KEY, Database, DatabaseBusyError
+from app.database import POSTGRES_WRITER_LOCK_ARGS, Database, DatabaseBusyError
 from app.db_engine import init_models_sync, make_sync_engine
 from app.main import app
 from app.models import Application, Base, Job, Resume, TailoringPreview
@@ -141,7 +141,7 @@ async def test_concurrent_master_replacement_leaves_exactly_one_master(
             )
             for index in range(8)
         ]
-        # Without the global advisory lock two READ COMMITTED writers both see
+        # Without the writer advisory lock two READ COMMITTED writers both see
         # the failed master and the second insert violates the partial index.
         created = await asyncio.gather(*uploads)
         assert len(created) == 8
@@ -160,6 +160,32 @@ async def test_concurrent_master_replacement_leaves_exactly_one_master(
             select(func.count()).select_from(Resume).where(Resume.is_master.is_(True))
         )
     assert masters == 1
+
+
+async def test_writer_lock_is_scoped_to_the_schema(
+    isolated_db: Database, second_postgres_schema_url: str
+) -> None:
+    """Advisory locks are database-wide; the writer key must not be."""
+    neighbour = Database(database_url=second_postgres_schema_url)
+    same_schema = Database(database_url=isolated_db.database_url)
+    try:
+        async with hold_writer(isolated_db):
+            # Another schema in the same database holds its own writer at the
+            # same time and commits (a 5s lock wait would fail this).
+            async with hold_writer(neighbour):
+                pass
+            await neighbour.create_resume(content="Neighbour")
+            # The same schema is still serialized.
+            async with same_schema._session() as session:
+                await session.execute(text("SET LOCAL lock_timeout = '50ms'"))
+                with pytest.raises(DBAPIError) as caught:
+                    await session.execute(same_schema._reserve_writer)
+            assert getattr(caught.value.orig, "sqlstate", None) == "55P03"
+        assert await isolated_db.list_resumes() == []
+        assert [row["content"] for row in await neighbour.list_resumes()] == ["Neighbour"]
+    finally:
+        await neighbour.close()
+        await same_schema.close()
 
 
 async def test_partial_unique_index_rejects_a_second_master(isolated_db: Database) -> None:
@@ -321,7 +347,7 @@ async def test_failed_manual_card_rolls_back_job_under_later_contention(
             del session
             if not contended:
                 contender.execute(
-                    text(f"SELECT pg_advisory_lock({POSTGRES_WRITER_LOCK_KEY})")
+                    text(f"SELECT pg_advisory_lock({POSTGRES_WRITER_LOCK_ARGS})")
                 )
                 contended = True
 
@@ -334,7 +360,7 @@ async def test_failed_manual_card_rolls_back_job_under_later_contention(
             event.remove(Application, "before_insert", reject_card)
             event.remove(Session, "after_rollback", contend_after_rollback)
             contender.execute(
-                text(f"SELECT pg_advisory_unlock({POSTGRES_WRITER_LOCK_KEY})")
+                text(f"SELECT pg_advisory_unlock({POSTGRES_WRITER_LOCK_ARGS})")
             )
             contender.close()
     assert contended

@@ -393,6 +393,19 @@ def sample_changes():
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
+def second_postgres_schema_url() -> Iterator[str]:
+    """URL of another empty schema on the PostgreSQL test server (a neighbour)."""
+    if not USING_POSTGRES:
+        pytest.skip("requires TEST_DATABASE_URL (PostgreSQL)")
+    schema = f"test_{uuid4().hex}"
+    _postgres_admin(f'CREATE SCHEMA "{schema}"')
+    try:
+        yield postgres_schema_url(schema)
+    finally:
+        _postgres_admin(f'DROP SCHEMA "{schema}" CASCADE')
+
+
+@pytest.fixture
 def isolated_db(isolated_backend_state: Any) -> Any:
     """Expose the per-test real database (SQLite, or PostgreSQL schema) to tests."""
     return isolated_backend_state
