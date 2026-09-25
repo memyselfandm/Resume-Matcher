@@ -120,8 +120,13 @@ refuses any route path that is not made of such segments.
 All three are deterministic after tailoring (no LLM in the check) and return a
 **summary** by default: a verdict, scores, and the failing checks rendered in
 English from `app/services/ats_parse/messages_en.py`. `detail=true` adds the
-full report (`report`) exactly as the REST route returns it. For the fixture
-resume the default output is under 2 KB (tested).
+full report (`report`) exactly as the REST route returns it. On the committed
+render fixtures (`tests/fixtures/ats_parse/renders/`) the default outputs
+measure about 0.2 KB (`ats_parse_check_file`, `ats_parse_check_resume` for one
+template), 0.6 KB (`tailor_and_verify`) and 2.0 KB (`ats_parse_check_resume`
+with `all_templates`); each is asserted to be under 2 KB. A check the English
+catalog cannot render is reported with its raw `id` and `params` instead of a
+`message`.
 
 **Verdict (`passes`).** `content_recall >= min_content_recall` (0.95 by
 default; only when a round trip was computed, so not for uploaded files) **and**
@@ -131,7 +136,9 @@ templates (`swiss-two-column`, `modern-two-column`, `vivid`) the engine reports
 chosen layout never fails the verdict on its own. When `passes` is false,
 `reasons` says why.
 
-Summary shape of `tailor_and_verify`:
+Summary shape of `tailor_and_verify` (on the committed swiss-two-column fixture
+render, which recovers 0.947 of its own source; hence `min_content_recall=0.9`
+in this example):
 
 ```json
 {
@@ -167,11 +174,17 @@ job-keyword score from the preview (`ats_score.overall_score`); with
 the parse-check `report` are included. Preview and confirm `warnings` are
 passed through when present.
 
-`ats_parse_check_resume` returns `{resume_id, render_locale, results[]}` with one
-entry per template (`template`, `status`, the same verdict fields, and
-`two_column_by_design: true` where applicable); a template that could not be
-rendered in `all_templates` mode carries `status: render_failed | timed_out`
-and `error` instead of a verdict. `ats_parse_check_file` returns
+`ats_parse_check_resume` returns `{resume_id, render_locale, messages, results[]}`
+with one entry per template: `template`, the same verdict fields (verdict at
+the 0.95 default) and `two_column_by_design: true` where applicable; an empty
+`failing_checks` is omitted. `messages` maps a check id to its English message
+when that message is identical for every template that fails the check (for
+example `multi_column` on the three two-column templates); such entries carry
+only `id`, `severity` and `expected_by_template`, while a message whose wording
+differs per template (for example `section_headings`) stays inline. A template
+that could not be rendered in `all_templates` mode carries
+`status: render_failed | timed_out` and `error` instead of a verdict (checked
+templates have no `status` field). `ats_parse_check_file` returns
 `file_format`, `extractability`, `content_language` and the verdict fields.
 
 **Persistence (`tailor_and_verify`).** The tailored resume and its tracker card
@@ -184,13 +197,23 @@ itself cannot run (renderer busy after three attempts that honour
 `tailored_resume_id` and `application_id` so the check can be retried with
 `ats_parse_check_resume`.
 
-**Idempotency (`tailor_and_verify`).** Calls are keyed by all arguments except
-`wait_seconds` (resume, job, merged template settings, threshold, prompt,
-detail). A retry while the first call runs joins that task (same `task_id`); a
-repeat after it succeeded returns the stored result (for the task retention of
-one hour) instead of tailoring again, so a lost response never creates a
-second tailored resume or tracker card. A failed or cancelled run is not
-reused. Different settings start a new run.
+**Idempotency (`tailor_and_verify`).** A run is keyed by the inputs that change
+what gets created: `resume_id`, `job_id`, `prompt_id`, the merged template
+settings, and a SHA-256 of the source resume's content (`processed_resume` and
+the raw upload text) and the job description text, fetched when the call is
+made. Content is hashed rather than `updated_at` because jobs have no
+`updated_at`. A call with the same key while the run is in progress joins it
+(same `task_id`); after it succeeded, the stored result is returned (for the
+task retention of one hour) instead of tailoring again, so a lost response
+never creates a second tailored resume or tracker card. Editing the source
+resume or the job changes the key and starts a new run. `detail` and
+`min_content_recall` are **not** part of the key: the task stores the full
+result, and each call projects it for itself, recomputing `passes`/`reasons`
+for its own `min_content_recall` and including `report`/`keyword_score_detail`
+only with `detail=true`. `get_task` shows the view of the call that started the
+run. A failed or cancelled run is not reused. Any failure after the confirm
+step (renderer unavailable, an unexpected error) is reported as a tool error
+that names the saved `tailored_resume_id` and `application_id`.
 
 **Renderer.** The own-output tools need the same render path as
 `export_resume_pdf` (`get_status.pdf_export_ready`). Only one own-output check
