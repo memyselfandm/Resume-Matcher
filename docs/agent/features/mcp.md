@@ -120,13 +120,27 @@ refuses any route path that is not made of such segments.
 All three are deterministic after tailoring (no LLM in the check) and return a
 **summary** by default: a verdict, scores, and the failing checks rendered in
 English from `app/services/ats_parse/messages_en.py`. `detail=true` adds the
-full report (`report`) exactly as the REST route returns it. On the committed
-render fixtures (`tests/fixtures/ats_parse/renders/`) the default outputs
-measure about 0.2 KB (`ats_parse_check_file`, `ats_parse_check_resume` for one
-template), 0.6 KB (`tailor_and_verify`) and 2.0 KB (`ats_parse_check_resume`
-with `all_templates`); each is asserted to be under 2 KB. A check the English
-catalog cannot render is reported with its raw `id` and `params` instead of a
-`message`.
+full report (`report`) exactly as the REST route returns it.
+
+**Bounded by design.** Default (non-`detail`) output stays under 2 KB whatever
+the report contains, because every variable part is capped
+(`app/mcp/tools/ats.py`):
+
+| Part | Cap |
+|---|---|
+| `failing_checks` per summary | 3 most severe (fatal, high, medium, low), then `more_failing_checks: N` |
+| List params inside a message | first 5 items, then `and N more`; each item clipped to 40 characters |
+| Message | 200 characters; a check the English catalog cannot render gets "No English message for this check; params: {...}" (bounded the same way) |
+| Check id | 32 characters |
+| `reasons` | recall reason plus at most 3 fatal/high ids, then `and N more` |
+| `warnings` (`tailor_and_verify`) | first 2, each clipped to 160 characters, then `and N more` |
+| `all_templates` rows | no messages or `content_score`; `top_failing_checks` = 2 `"id (severity)"` strings, then `more_failing_checks: N` |
+
+`tests/integration/test_mcp_ats_tools.py::TestSummaryBound` feeds every tool a
+synthetic worst case (every known check failing with 25-item parameter lists,
+an unknown check, 20 long warnings, all seven templates) and asserts each
+default output is under 2048 bytes; `detail=true` still returns every check and
+the full parameters and warnings.
 
 **Verdict (`passes`).** `content_recall >= min_content_recall` (0.95 by
 default; only when a round trip was computed, so not for uploaded files) **and**
@@ -174,17 +188,18 @@ job-keyword score from the preview (`ats_score.overall_score`); with
 the parse-check `report` are included. Preview and confirm `warnings` are
 passed through when present.
 
-`ats_parse_check_resume` returns `{resume_id, render_locale, messages, results[]}`
-with one entry per template: `template`, the same verdict fields (verdict at
-the 0.95 default) and `two_column_by_design: true` where applicable; an empty
-`failing_checks` is omitted. `messages` maps a check id to its English message
-when that message is identical for every template that fails the check (for
-example `multi_column` on the three two-column templates); such entries carry
-only `id`, `severity` and `expected_by_template`, while a message whose wording
-differs per template (for example `section_headings`) stays inline. A template
-that could not be rendered in `all_templates` mode carries
-`status: render_failed | timed_out` and `error` instead of a verdict (checked
-templates have no `status` field). `ats_parse_check_file` returns
+`ats_parse_check_resume` returns `{resume_id, render_locale, results[]}`. For
+one template the entry is the full summary: `template`, the verdict fields
+(verdict at the 0.95 default), `failing_checks` with messages, `reasons`, and
+`two_column_by_design: true` where applicable. With `all_templates` each entry
+is a comparison row: `template`, `two_column_by_design`, `passes`,
+`parseability_score`, `content_recall`, `order_fidelity`,
+`top_failing_checks` (for example `["multi_column (medium)",
+"section_headings (medium)"]`) and `more_failing_checks`; check one template
+(or pass `detail=true`) for the explanations. A template that could not be
+rendered in `all_templates` mode carries `status: render_failed | timed_out`
+and `error` instead of a verdict (checked templates have no `status` field).
+`ats_parse_check_file` returns
 `file_format`, `extractability`, `content_language` and the verdict fields.
 
 **Persistence (`tailor_and_verify`).** The tailored resume and its tracker card
