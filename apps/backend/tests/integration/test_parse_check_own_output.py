@@ -423,21 +423,43 @@ async def test_concurrent_own_output_check_is_429(client: AsyncClient, resume_id
     assert responses["after"].status_code == 200  # the slot is released
 
 
-async def test_single_renderer_slot_is_polled_until_the_budget_runs_out(
+async def test_single_renderer_slot_is_polled_past_the_shared_retry_limit(
+    client: AsyncClient, resume_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pdf, "_PDF_MAX_CONCURRENCY", 1)
+    monkeypatch.setattr(own_output, "SINGLE_SLOT_POLL_SECONDS", 0.01)
+    busy_polls = own_output.MAX_RENDER_ATTEMPTS + 2
+
+    def busy_for_a_while(template: str, attempt: int) -> Exception | None:
+        return PDFRenderOverloadedError(RENDER_BUSY_MESSAGE) if attempt <= busy_polls else None
+
+    calls: list[str] = []
+    with patch("app.routers.resumes.render_resume_pdf", _fixture_render(calls, busy_for_a_while)):
+        async with client:
+            response = await client.post(f"/api/v1/resumes/{resume_id}/parse-check", json={})
+    assert response.status_code == 200
+    [result] = response.json()["results"]
+    assert result["status"] == "ok"
+    # A shared renderer gives up after MAX_RENDER_ATTEMPTS; a single slot is polled.
+    assert result["render_attempts"] == busy_polls + 1
+
+
+async def test_single_renderer_slot_polling_stops_at_the_budget(
     client: AsyncClient, resume_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(pdf, "_PDF_MAX_CONCURRENCY", 1)
     monkeypatch.setattr(own_output, "SINGLE_SLOT_POLL_SECONDS", 0.05)
     monkeypatch.setattr(own_output, "MIN_ANALYSIS_SECONDS", 0.2)
     monkeypatch.setattr(own_output, "SINGLE_TEMPLATE_BUDGET_SECONDS", 1.0)
-    calls: list[str] = []
-    always_busy = _fixture_render(calls, lambda *_: PDFRenderOverloadedError(RENDER_BUSY_MESSAGE))
+    always_busy = _fixture_render([], lambda *_: PDFRenderOverloadedError(RENDER_BUSY_MESSAGE))
     with patch("app.routers.resumes.render_resume_pdf", always_busy):
         async with client:
+            started = anyio.current_time()
             response = await client.post(f"/api/v1/resumes/{resume_id}/parse-check", json={})
-    assert response.status_code == 503
-    # Polled past the three attempts a shared renderer gets.
-    assert len(calls) > own_output.MAX_RENDER_ATTEMPTS
+            elapsed = anyio.current_time() - started
+    # Busy after the last poll (503), or out of budget mid-request (504).
+    assert response.status_code in (503, 504)
+    assert elapsed < 5.0  # bounded by the 1 s budget, not the renderer
 
 
 async def test_sweep_waits_for_a_user_download_holding_the_only_slot(
