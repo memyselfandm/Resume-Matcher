@@ -105,7 +105,9 @@ Known limitations of the word-break rule:
 ```
 
 Checks carry an `id` and `params` only, never prose. The frontend renders text
-from its locale files; MCP/CLI consumers use `app/services/ats_parse/messages_en.py`.
+from its locale files; MCP/CLI consumers use `app/services/ats_parse/messages_en.py`
+(the MCP tools `ats_parse_check_file`, `ats_parse_check_resume` and
+`tailor_and_verify` are described in [mcp.md](mcp.md)).
 Scores start at 100 and subtract 100/20/10/4 per failed fatal/high/medium/low
 check; any fatal failure caps a score at 10.
 
