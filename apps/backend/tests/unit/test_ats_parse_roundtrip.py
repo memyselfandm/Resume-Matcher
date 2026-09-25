@@ -300,3 +300,98 @@ def test_round_trip_stops_at_the_deadline() -> None:
         compute_roundtrip(source, text, deadline=started + 0.2)
     # The deadline is checked per field, including inside an entry's bullets.
     assert time.monotonic() - started < 1.5
+
+
+def _custom_source(**meta_overrides: Any) -> dict[str, Any]:
+    """Three visible custom sections, one of each type, as the builder saves them."""
+    meta = [
+        {"id": "summary", "key": "summary", "displayName": "Summary", "sectionType": "text",
+         "isDefault": True, "isVisible": True, "order": 1},
+        {"id": "custom_1", "key": "custom_1", "displayName": "Volunteering",
+         "sectionType": "stringList", "isDefault": False, "isVisible": True, "order": 2},
+        {"id": "custom_2", "key": "custom_2", "displayName": "Interests",
+         "sectionType": "text", "isDefault": False, "isVisible": True, "order": 3},
+        {"id": "custom_3", "key": "custom_3", "displayName": "Talks",
+         "sectionType": "itemList", "isDefault": False, "isVisible": True, "order": 4},
+    ]
+    for entry in meta:
+        entry.update(meta_overrides.get(entry["key"], {}))
+    return {
+        "personalInfo": {"name": "Ada Example"},
+        "summary": "Backend engineer building data platforms.",
+        "sectionMeta": meta,
+        "customSections": {
+            "custom_1": {"sectionType": "stringList",
+                         "strings": ["Code mentor at Oakland Youth Coding Club", "Food bank driver"]},
+            "custom_2": {"sectionType": "text", "text": "Trail running and amateur radio."},
+            "custom_3": {"sectionType": "itemList", "items": [
+                {"id": 1, "title": "Scaling Event Pipelines", "subtitle": "PyBay",
+                 "years": "2024", "description": ["Talk on exactly-once delivery."]}
+            ]},
+        },
+    }
+
+
+@pytest.mark.parametrize("joiner", [", ", " • "])
+def test_rendered_custom_sections_of_every_type_are_found(joiner: str) -> None:
+    """String lists print joined (", " in most templates, " • " in vivid)."""
+    text = (
+        "Ada Example\nSummary\nBackend engineer building data platforms.\n"
+        f"Volunteering\nCode mentor at Oakland Youth Coding Club{joiner}Food bank driver\n"
+        "Interests\nTrail running and amateur radio.\n"
+        "Talks\nScaling Event Pipelines 2024\nPyBay\nTalk on exactly-once delivery."
+    )
+    statuses = _statuses(compute_roundtrip(_custom_source(), text))
+    custom = {path: status for path, status in statuses.items() if "custom_" in path}
+    assert custom == {
+        "heading.custom_1": "found",
+        "customSections.custom_1.strings[0]": "found",
+        "customSections.custom_1.strings[1]": "found",
+        "heading.custom_2": "found",
+        "customSections.custom_2.text": "found",
+        "heading.custom_3": "found",
+        "customSections.custom_3[0].title": "found",
+        "customSections.custom_3[0].subtitle": "found",
+        "customSections.custom_3[0].years": "found",
+        "customSections.custom_3[0].description[0]": "found",
+    }
+
+
+def test_hidden_custom_sections_are_hidden() -> None:
+    source = _custom_source(
+        custom_1={"isVisible": False}, custom_2={"isVisible": False}, custom_3={"isVisible": False}
+    )
+    result = compute_roundtrip(source, "Ada Example\nSummary\nBackend engineer building data platforms.")
+    statuses = _statuses(result)
+    assert {status for path, status in statuses.items() if "custom_" in path} == {"hidden"}
+    assert result.content_recall == 1.0
+
+
+def test_custom_section_with_default_flag_is_not_rendered() -> None:
+    """Templates print a custom section only when ``isDefault`` is false; a meta
+    saved without the flag gets the backend default (true) and is skipped."""
+    source = _custom_source(custom_1={"isDefault": True})
+    text = (
+        "Ada Example\nSummary\nBackend engineer building data platforms.\n"
+        "Interests\nTrail running and amateur radio.\n"
+        "Talks\nScaling Event Pipelines 2024\nPyBay\nTalk on exactly-once delivery."
+    )
+    result = compute_roundtrip(source, text)
+    statuses = _statuses(result)
+    assert statuses["heading.custom_1"] == "not_rendered"
+    assert statuses["customSections.custom_1.strings[0]"] == "not_rendered"
+    assert statuses["customSections.custom_2.text"] == "found"
+    assert result.content_recall == 1.0
+
+
+def test_custom_section_prints_only_the_content_of_its_meta_type() -> None:
+    source = _custom_source(custom_1={"sectionType": "text"})
+    text = (
+        "Ada Example\nSummary\nBackend engineer building data platforms.\n"
+        "Interests\nTrail running and amateur radio.\n"
+        "Talks\nScaling Event Pipelines 2024\nPyBay\nTalk on exactly-once delivery."
+    )
+    statuses = _statuses(compute_roundtrip(source, text))
+    # A "text" section with only strings has no content to print, not even its heading.
+    assert statuses["heading.custom_1"] == "not_rendered"
+    assert statuses["customSections.custom_1.strings[1]"] == "not_rendered"
