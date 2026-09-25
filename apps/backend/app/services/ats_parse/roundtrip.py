@@ -27,10 +27,12 @@ included, must then be found inside its own entry's span.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
+from app.services.ats_parse.extract import check_deadline
 from app.services.ats_parse.normalize import normalize_text, tokenize
 from app.services.ats_parse.report import FieldStatus, RoundtripField, RoundtripResult
 
@@ -44,6 +46,9 @@ ENTRY_BACK_SLACK_TOKENS = 8
 # when it is found verbatim within this many tokens of the cursor, so one
 # misplaced match can never skip over whole entries.
 WALK_MAX_GAP_TOKENS = 12
+# Expected fields compared per document; the rest are not scored and the
+# result is marked ``truncated`` (a resume never comes close).
+MAX_ROUNDTRIP_FIELDS = 1_000
 
 DEFAULT_SECTION_ORDER = (
     "summary",
@@ -284,18 +289,40 @@ def _best_window(needle: list[str], haystack: list[str]) -> tuple[float, int]:
     return best / len(needle), best_start
 
 
-def _find_exact(needle: list[str], haystack: list[str], start: int = 0, end: int | None = None) -> int:
+class _Haystack(list[str]):
+    """Extracted tokens plus their joined text, so exact searches are one
+    ``str.find`` over a slice of a string built once, not a re-join per call."""
+
+    def __init__(self, tokens: list[str]) -> None:
+        super().__init__(tokens)
+        self.text = " " + " ".join(tokens) + " "
+        # offsets[i] is the index of the space before token i; offsets[n] is
+        # the trailing space.
+        self.offsets: list[int] = []
+        position = 0
+        for token in tokens:
+            self.offsets.append(position)
+            position += len(token) + 1
+        self.offsets.append(position)
+
+
+def _find_exact(
+    needle: list[str], haystack: _Haystack, start: int = 0, end: int | None = None
+) -> int:
     """Token position of the first contiguous occurrence in [start, end), or -1."""
-    window = haystack[start:end]
-    joined = " " + " ".join(window) + " "
-    offset = joined.find(" " + " ".join(needle) + " ")
+    count = len(haystack)
+    start = max(0, min(start, count))
+    end = count if end is None else max(start, min(end, count))
+    offset = haystack.text.find(
+        " " + " ".join(needle) + " ", haystack.offsets[start], haystack.offsets[end] + 1
+    )
     if offset < 0:
         return -1
-    return start + joined.count(" ", 0, offset)
+    return bisect_left(haystack.offsets, offset)
 
 
 def _locate(
-    needle: list[str], haystack: list[str], start: int = 0, end: int | None = None
+    needle: list[str], haystack: _Haystack, start: int = 0, end: int | None = None
 ) -> tuple[float, int]:
     """Exact contiguous match first, else the best fuzzy window, within [start, end)."""
     position = _find_exact(needle, haystack, start, end)
@@ -310,7 +337,7 @@ def _needle(field: ExpectedField) -> list[str]:
 
 
 def _find_unclaimed(
-    needle: list[str], haystack: list[str], start: int, claimed: list[tuple[int, int]]
+    needle: list[str], haystack: _Haystack, start: int, claimed: list[tuple[int, int]]
 ) -> int:
     """First verbatim occurrence at or after ``start`` outside every claimed span."""
     position = _find_exact(needle, haystack, start)
@@ -320,7 +347,7 @@ def _find_unclaimed(
 
 
 def _repeat_limit(
-    anchor: list[str], others: list[list[str]], haystack: list[str], start: int
+    anchor: list[str], others: list[list[str]], haystack: _Haystack, start: int
 ) -> int:
     """Where an identical copy of this entry's identity starts, else the text end.
 
@@ -344,7 +371,7 @@ def _repeat_limit(
 
 
 def _anchor_entries(
-    fields: list[ExpectedField], haystack: list[str]
+    fields: list[ExpectedField], haystack: _Haystack, deadline: float | None = None
 ) -> dict[str, int]:
     """Walk the text in render order and return each entry's start token.
 
@@ -362,6 +389,7 @@ def _anchor_entries(
     claimed: list[tuple[int, int]] = []
     cursor = 0
     for field in fields:
+        check_deadline(deadline)
         needle = _needle(field)
         if not needle:
             continue
@@ -392,6 +420,7 @@ def _anchor_entries(
                 anchors[entry] = cursor = start
                 limits[entry] = _repeat_limit(identities[index], others, haystack, start)
                 for member in members:
+                    check_deadline(deadline)
                     value = _needle(member)
                     if not member.kind.endswith(".description") or not value:
                         continue
@@ -443,6 +472,7 @@ def compute_roundtrip(
     rendered_fields: frozenset[str] | None = None,
     personal_order: tuple[str, ...] | None = None,
     body_order: tuple[str, ...] | None = None,
+    deadline: float | None = None,
 ) -> RoundtripResult:
     """Score how completely and in what order source fields survive extraction.
 
@@ -456,20 +486,27 @@ def compute_roundtrip(
         personal_order: Render order of personal field kinds, if not the default.
         body_order: Fixed render order of section groups for templates that
             ignore ``sectionMeta`` order; ``None`` keeps ``sectionMeta`` order.
+        deadline: ``time.monotonic()`` value after which scoring stops.
+
+    Raises:
+        TimeoutError: the deadline passed.
     """
-    haystack = tokenize(normalize_text(extracted_text))
+    haystack = _Haystack(tokenize(normalize_text(extracted_text)))
     fields = order_fields(expected_fields(source), personal_order, body_order)
+    truncated = len(fields) > MAX_ROUNDTRIP_FIELDS
+    fields = fields[:MAX_ROUNDTRIP_FIELDS]
     active = [
         field
         for field in fields
         if not field.hidden and (rendered_fields is None or field.kind in rendered_fields)
     ]
-    anchors = _anchor_entries(active, haystack)
+    anchors = _anchor_entries(active, haystack, deadline)
     spans = _entry_spans(active, anchors, len(haystack))
     results: list[RoundtripField] = []
     positions: list[int] = []
     found = considered = 0
     for field in fields:
+        check_deadline(deadline)
         status: FieldStatus
         if field.hidden:
             results.append(RoundtripField(field=field.path, status="hidden", score=0.0))
@@ -503,4 +540,5 @@ def compute_roundtrip(
         content_recall=round(recall, 3),
         order_fidelity=round(_kendall_fidelity(positions), 3),
         fields=results,
+        truncated=truncated,
     )

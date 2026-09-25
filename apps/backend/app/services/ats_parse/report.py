@@ -54,6 +54,8 @@ class RoundtripResult(BaseModel):
     content_recall: float
     order_fidelity: float
     fields: list[RoundtripField]
+    # True when the source had more expected fields than are compared.
+    truncated: bool = False
 
 
 class ProfileResult(BaseModel):

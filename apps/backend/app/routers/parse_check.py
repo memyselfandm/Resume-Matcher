@@ -1,10 +1,17 @@
-"""ATS parse-check endpoints (parseability of a resume file, no persistence)."""
+"""ATS parse-check endpoints (parseability of a resume file, no persistence).
+
+* ``POST /ats/parse-check``: an uploaded PDF/DOCX/DOC.
+* ``POST /resumes/{resume_id}/parse-check``: Resume Matcher's own output, the
+  PDF a user downloads for the given template settings, with round-trip
+  self-consistency against the payload the template rendered.
+"""
 
 import logging
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.routers.resumes import (
     ALLOWED_TYPES,
@@ -12,14 +19,26 @@ from app.routers.resumes import (
     MAX_FILE_SIZE,
     UPLOAD_READ_CHUNK_SIZE,
 )
+from app.config_cache import get_content_language
+from app.internal_client import InvalidIdentifierError
 from app.services.ats_parse import ParseCheckReport, run_parse_check
+from app.services.ats_parse.own_output import (
+    BUSY_RETRY_AFTER_SECONDS,
+    OwnOutputBusyError,
+    OwnOutputParseCheck,
+    RenderUnavailableError,
+    ResumeNotFoundError,
+    ResumeNotProcessedError,
+    TemplateSettings,
+    check_own_output,
+)
 from app.services.parser import (
     MAX_UNPACKED_DOCUMENT_BYTES,
     DocumentResourceLimitError,
     DocumentValidationError,
 )
 
-router = APIRouter(prefix="/ats", tags=["ATS Parse Check"])
+router = APIRouter(tags=["ATS Parse Check"])
 logger = logging.getLogger(__name__)
 
 ContentLanguage = Literal["en", "es", "fr", "pt", "de", "ja", "ko", "zh"]
@@ -51,7 +70,7 @@ async def _read_bounded(file: UploadFile) -> bytes:
     )
 
 
-@router.post("/parse-check", response_model=ParseCheckReport)
+@router.post("/ats/parse-check", response_model=ParseCheckReport)
 async def parse_check_file(
     file: UploadFile = File(...),
     content_language: ContentLanguage | None = Form(default=None),
@@ -92,6 +111,76 @@ async def parse_check_file(
         ) from exc
     except Exception as exc:
         logger.exception("Parse check failed")
+        raise HTTPException(
+            status_code=500, detail="Parse check failed. Please try again."
+        ) from exc
+
+
+class OwnOutputParseCheckRequest(BaseModel):
+    """Body of ``POST /resumes/{resume_id}/parse-check`` (every field optional)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    settings: TemplateSettings = Field(default_factory=TemplateSettings)
+    content_language: ContentLanguage | None = None
+    all_templates: bool = False
+
+
+_RENDER_FAILURES: dict[str, tuple[int, str]] = {
+    "render_busy": (503, "PDF renderer is busy. Please try again shortly."),
+    "render_timeout": (504, "PDF rendering timed out. Please try again."),
+    "render_error": (503, "PDF rendering failed. Please try again."),
+    "analysis_error": (500, "Parse check failed. Please try again."),
+    "budget_exhausted": (504, "Parse check timed out. Please try again."),
+}
+
+
+@router.post("/resumes/{resume_id}/parse-check", response_model=OwnOutputParseCheck)
+async def parse_check_resume(
+    resume_id: str,
+    request: Request,
+    body: OwnOutputParseCheckRequest | None = None,
+) -> OwnOutputParseCheck:
+    """Parse-check a stored resume exactly as its PDF download renders it.
+
+    Renders ``GET /resumes/{id}/pdf`` with the full template settings (one
+    template, or all seven with ``all_templates``), extracts each PDF, and
+    compares the text with the payload the print page rendered. Nothing is
+    stored. ``content_language`` defaults to the configured content language;
+    ``settings.lang`` is the print locale that localizes section headings.
+    With ``all_templates``, a template that cannot be rendered is reported as
+    ``render_failed`` (or ``timed_out``) and the response is still 200. Only
+    one such check runs at a time; another request gets 429 with Retry-After.
+    """
+    options = body or OwnOutputParseCheckRequest()
+    content_language = options.content_language or get_content_language()
+    try:
+        return await check_own_output(
+            request.app,
+            resume_id,
+            settings=options.settings,
+            content_language=content_language,
+            all_templates=options.all_templates,
+        )
+    except OwnOutputBusyError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Another parse check of rendered output is running. Please try again shortly.",
+            headers={"Retry-After": str(BUSY_RETRY_AFTER_SECONDS)},
+        ) from exc
+    except (InvalidIdentifierError, ResumeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Resume not found") from exc
+    except ResumeNotProcessedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Resume has no structured data yet. Wait for processing to finish, then try again.",
+        ) from exc
+    except RenderUnavailableError as exc:
+        status_code, detail = _RENDER_FAILURES[exc.result.error or "render_error"]
+        logger.warning("Own-output parse check could not render: %s", exc.result.error)
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except Exception as exc:
+        logger.exception("Own-output parse check failed")
         raise HTTPException(
             status_code=500, detail="Parse check failed. Please try again."
         ) from exc

@@ -2,13 +2,19 @@
 
 import copy
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from app.services.ats_parse.extract import extract_document
-from app.services.ats_parse.roundtrip import compute_roundtrip, expected_fields, order_fields
+from app.services.ats_parse.extract import MAX_EXTRACTED_CHARS, extract_document
+from app.services.ats_parse.roundtrip import (
+    MAX_ROUNDTRIP_FIELDS,
+    compute_roundtrip,
+    expected_fields,
+    order_fields,
+)
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "ats_parse"
 
@@ -254,3 +260,43 @@ def test_custom_item_kinds_do_not_include_the_section_key() -> None:
     }
     kinds = {field.path: field.kind for field in expected_fields(source)}
     assert kinds["customSections.pubs[0].title"] == "customSections.title"
+
+
+def _huge_source(bullets: int) -> tuple[dict[str, Any], str]:
+    descriptions = [
+        f"Delivered project {index} for client team {index * 7} with outcome {index * 3} percent"
+        for index in range(bullets)
+    ]
+    source = {
+        "personalInfo": {"name": "Ada Example"},
+        "workExperience": [
+            {"title": "Engineer", "company": "Acme", "years": "2020 - 2024",
+             "description": descriptions}
+        ],
+    }
+    text = "Ada Example\nEngineer Acme 2020 - 2024\n" + "\n".join(
+        line if index % 2 else "unrelated words" for index, line in enumerate(descriptions)
+    )
+    return source, text[:MAX_EXTRACTED_CHARS]
+
+
+def test_huge_source_is_capped_and_marked_truncated() -> None:
+    source, text = _huge_source(5_000)
+    started = time.monotonic()
+    result = compute_roundtrip(source, text, deadline=started + 60)
+    assert result.truncated is True
+    assert len(result.fields) == MAX_ROUNDTRIP_FIELDS
+    assert time.monotonic() - started < 30
+
+
+def test_small_source_is_not_truncated(source: dict[str, Any], rendered_text: str) -> None:
+    assert compute_roundtrip(source, rendered_text).truncated is False
+
+
+def test_round_trip_stops_at_the_deadline() -> None:
+    source, text = _huge_source(5_000)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        compute_roundtrip(source, text, deadline=started + 0.2)
+    # The deadline is checked per field, including inside an entry's bullets.
+    assert time.monotonic() - started < 1.5
