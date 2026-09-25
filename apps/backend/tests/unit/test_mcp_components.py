@@ -112,6 +112,40 @@ class TestTaskRegistry:
             "result": {"value": 42},
         }
 
+    async def test_presenter_shapes_serialized_result_only(self) -> None:
+        registry = TaskRegistry()
+
+        async def work() -> dict[str, Any]:
+            return {"value": 42, "bulky": "x" * 10}
+
+        def present(result: dict[str, Any]) -> dict[str, Any]:
+            return {"value": result["value"]}
+
+        record = registry.start("work", work, present)
+        await registry.wait(record.task_id, 5)
+        assert record.to_dict()["result"] == {"value": 42}
+        assert record.result == {"value": 42, "bulky": "x" * 10}
+
+    async def test_joined_calls_each_get_their_own_view(self) -> None:
+        runtime = MCPRuntime(bridge=None, transport="stdio")  # type: ignore[arg-type]
+        started: list[int] = []
+
+        async def work() -> dict[str, Any]:
+            started.append(1)
+            return {"value": 42}
+
+        first = await runtime.run_long_operation(
+            "work", work, 5, idempotency_key="k", presenter=lambda r: {"shown": r["value"]}
+        )
+        second = await runtime.run_long_operation(
+            "work", work, 5, idempotency_key="k", presenter=lambda r: {"doubled": r["value"] * 2}
+        )
+        assert started == [1]
+        assert first["task_id"] == second["task_id"]
+        assert first["shown"] == 42 and "value" not in first
+        assert second["doubled"] == 84 and "shown" not in second
+        await runtime.tasks.shutdown()
+
     async def test_wait_times_out_without_cancelling(self) -> None:
         registry = TaskRegistry()
         release = asyncio.Event()

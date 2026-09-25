@@ -20,6 +20,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 logger = logging.getLogger(__name__)
 
 TaskStatus = Literal["running", "succeeded", "failed", "cancelled"]
+Presenter = Callable[[dict[str, Any]], dict[str, Any]]
 
 DEFAULT_MAX_TASKS = 32
 DEFAULT_RETENTION_SECONDS = 3600.0
@@ -45,6 +46,8 @@ class TaskRecord:
     result: dict[str, Any] | None = None
     error: str | None = None
     delivered: bool = False
+    # Shapes the stored result for get_task (the starting call's view of it).
+    presenter: Presenter | None = field(default=None, repr=False)
     _task: asyncio.Task[dict[str, Any]] | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -55,7 +58,7 @@ class TaskRecord:
             "status": self.status,
         }
         if self.status == "succeeded" and self.result is not None:
-            payload["result"] = self.result
+            payload["result"] = self.presenter(self.result) if self.presenter else self.result
         if self.error is not None:
             payload["error"] = self.error
         return payload
@@ -87,8 +90,16 @@ class TaskRegistry:
         self._retention_seconds = retention_seconds
         self._clock = clock
 
-    def start(self, name: str, operation: Callable[[], Awaitable[dict[str, Any]]]) -> TaskRecord:
+    def start(
+        self,
+        name: str,
+        operation: Callable[[], Awaitable[dict[str, Any]]],
+        presenter: Presenter | None = None,
+    ) -> TaskRecord:
         """Schedule ``operation`` and return its record immediately.
+
+        ``presenter``, if given, shapes the stored result whenever the record
+        is serialized with ``to_dict``.
 
         Raises:
             TaskCapacityError: If every slot holds a running operation or a
@@ -100,7 +111,9 @@ class TaskRegistry:
                 "Too many operations are running or have unread results. Poll "
                 "get_task for finished ones or cancel one with cancel_task, then retry."
             )
-        record = TaskRecord(task_id=uuid4().hex, name=name, created_at=self._clock())
+        record = TaskRecord(
+            task_id=uuid4().hex, name=name, created_at=self._clock(), presenter=presenter
+        )
 
         async def runner() -> dict[str, Any]:
             return await operation()

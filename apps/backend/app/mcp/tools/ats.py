@@ -8,6 +8,8 @@ summary first: a verdict plus the failing checks rendered in English
 import asyncio
 import hashlib
 import json
+import logging
+from functools import partial
 from typing import Annotated, Any
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -16,13 +18,15 @@ from pydantic import Field
 
 from app.mcp.bridge import BridgeError, path_segment, upload_content_type
 from app.mcp.runtime import MCPRuntime, WaitSeconds
-from app.mcp.tools.resumes import decode_base64, read_local_file
+from app.mcp.tools.resumes import decode_base64, fetch_resume, read_local_file
 from app.mcp.tools.tailoring import confirm_preview, request_preview
 from app.routers.parse_check import ContentLanguage
 from app.services.ats_parse.messages_en import render_message
 from app.services.ats_parse.own_output import OwnOutputParseCheck, TemplateSettings
 from app.services.ats_parse.report import ParseCheckReport
 from app.services.ats_parse.templates import RenderLocale, TemplateId
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MIN_CONTENT_RECALL = 0.95
 # A failed check at these severities fails the verdict. The engine already
@@ -53,11 +57,14 @@ def failing_checks(report: ParseCheckReport) -> list[dict[str, Any]]:
     for check in report.checks:
         if check.status != "fail":
             continue
-        item: dict[str, Any] = {
-            "id": check.id,
-            "severity": check.severity,
-            "message": render_message(check),
-        }
+        item: dict[str, Any] = {"id": check.id, "severity": check.severity}
+        try:
+            item["message"] = render_message(check)
+        except (KeyError, IndexError, ValueError):
+            # A check id or parameter the English catalog does not know yet:
+            # report the raw id and parameters rather than failing the tool.
+            logger.warning("No English message for parse check %r", check.id)
+            item["params"] = check.params
         if check.params.get("expected_by_template") is True:
             item["expected_by_template"] = True
         items.append(item)
@@ -103,19 +110,44 @@ def report_summary(report: ParseCheckReport, min_content_recall: float) -> dict[
     return summary
 
 
-def own_output_summary(check: OwnOutputParseCheck) -> list[dict[str, Any]]:
-    """Per-template summaries; templates that could not be checked say why."""
+def own_output_summary(check: OwnOutputParseCheck) -> dict[str, Any]:
+    """Per-template summaries plus the English message of each failing check.
+
+    A check whose message is the same for every template that fails it (for
+    example ``multi_column`` on each two-column template) is explained once in
+    ``messages`` and referenced by id; an entry keeps its own ``message`` only
+    when the wording differs between templates. To keep seven templates
+    compact, ``status`` appears only for a template that could not be checked
+    (with ``error`` instead of a verdict) and an empty ``failing_checks`` is
+    omitted.
+    """
     results: list[dict[str, Any]] = []
     for result in check.results:
-        entry: dict[str, Any] = {"template": result.template, "status": result.status}
+        entry: dict[str, Any] = {"template": result.template}
         if result.expected_by_template:
             entry["two_column_by_design"] = True
         if result.report is None:
+            entry["status"] = result.status
             entry["error"] = result.error
         else:
             entry.update(report_summary(result.report, DEFAULT_MIN_CONTENT_RECALL))
+            if not entry["failing_checks"]:
+                del entry["failing_checks"]
         results.append(entry)
-    return results
+
+    wordings: dict[str, set[str]] = {}
+    for entry in results:
+        for item in entry.get("failing_checks", []):
+            if "message" in item:
+                wordings.setdefault(item["id"], set()).add(item["message"])
+    messages = {
+        check_id: next(iter(texts)) for check_id, texts in sorted(wordings.items()) if len(texts) == 1
+    }
+    for entry in results:
+        for item in entry.get("failing_checks", []):
+            if item["id"] in messages:
+                item.pop("message", None)
+    return {"messages": messages, "results": results}
 
 
 def _retry_after_seconds(error: BridgeError) -> float:
@@ -155,6 +187,84 @@ async def _check_own_output_retrying(
             delay = min(_retry_after_seconds(exc), PARSE_CHECK_BUSY_MAX_WAIT_SECONDS)
         attempt += 1
         await asyncio.sleep(delay)
+
+
+VERIFY_RESULT_IDS = (
+    "tailored_resume_id",
+    "application_id",
+    "source_resume_id",
+    "job_id",
+    "template",
+    "keyword_score",
+)
+
+
+def present_verification(
+    stored: dict[str, Any], *, detail: bool, min_content_recall: float
+) -> dict[str, Any]:
+    """Project a stored tailor_and_verify result for one call.
+
+    The task keeps the full result; the verdict is recomputed for the
+    caller's ``min_content_recall`` and the full reports are included only
+    with ``detail``.
+    """
+    check = OwnOutputParseCheck.model_validate(stored["report"])
+    report = check.results[0].report
+    if report is None:
+        raise ToolError("The parse check returned no report. Please try again.")
+    result: dict[str, Any] = {key: stored.get(key) for key in VERIFY_RESULT_IDS}
+    result["min_content_recall"] = min_content_recall
+    result.update(report_summary(report, min_content_recall))
+    if stored.get("warnings"):
+        result["warnings"] = stored["warnings"]
+    if detail:
+        result["keyword_score_detail"] = stored.get("keyword_score_detail")
+        result["report"] = stored["report"]
+    return result
+
+
+async def _verify_tailored(
+    runtime: MCPRuntime,
+    confirmed: dict[str, Any],
+    preview_data: dict[str, Any],
+    check_body: dict[str, Any],
+) -> dict[str, Any]:
+    """Parse-check a confirmed tailored resume and build the stored result."""
+    check = await _check_own_output_retrying(runtime, confirmed["tailored_resume_id"], check_body)
+    if len(check.results) != 1 or check.results[0].report is None:
+        raise ToolError("The parse check returned no report.")
+    ats = preview_data.get("ats_score") or {}
+    stored: dict[str, Any] = {
+        "tailored_resume_id": confirmed["tailored_resume_id"],
+        "application_id": confirmed["application_id"],
+        "source_resume_id": confirmed["source_resume_id"],
+        "job_id": confirmed["job_id"],
+        "template": check.results[0].template,
+        "keyword_score": ats.get("overall_score"),
+        "keyword_score_detail": ats or None,
+        "warnings": [*(preview_data.get("warnings") or []), *confirmed["warnings"]],
+        "report": check.model_dump(mode="json"),
+    }
+    # Fail inside the task (with the saved ids) if the result cannot be shown.
+    present_verification(stored, detail=False, min_content_recall=DEFAULT_MIN_CONTENT_RECALL)
+    return stored
+
+
+async def _source_fingerprint(runtime: MCPRuntime, resume_id: str, job_id: str) -> str:
+    """Hash of the source resume's content and the job text.
+
+    Part of the idempotency key, so a repeat call after either was edited
+    tailors again. Jobs have no ``updated_at``, and a resume's changes with
+    non-content writes, so content is hashed instead.
+    """
+    resume = await fetch_resume(runtime, resume_id)
+    job = await runtime.bridge.get_json(f"/jobs/{path_segment(job_id, 'job_id')}")
+    material = {
+        "processed_resume": resume.get("processed_resume"),
+        "raw_resume": (resume.get("raw_resume") or {}).get("content"),
+        "job": job.get("content"),
+    }
+    return hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
 
 
 def _template_settings(
@@ -270,7 +380,7 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
             result: dict[str, Any] = {
                 "resume_id": check.resume_id,
                 "render_locale": check.render_locale,
-                "results": own_output_summary(check),
+                **own_output_summary(check),
             }
             if detail:
                 result["report"] = check.model_dump(mode="json")
@@ -306,20 +416,23 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         passes (content_recall >= min_content_recall and no fatal/high check
         failed; column checks of two-column templates count as medium). The
         tailored resume is kept even when passes is false. Repeating the call
-        with the same arguments joins the running task or returns its result.
+        for the same resume, job, settings and prompt (and unchanged resume and
+        job content) joins the running task or returns its stored result,
+        re-judged with this call's min_content_recall and detail.
         """
         path_segment(resume_id, "resume_id")
         path_segment(job_id, "job_id")
         merged = _template_settings(settings, template=template)
         check_body = {"settings": merged.model_dump(mode="json")}
+        # Only inputs that change what gets created belong in the key; detail
+        # and min_content_recall only change how the stored result is shown.
         key_material = json.dumps(
             {
                 "resume_id": resume_id,
                 "job_id": job_id,
-                "settings": check_body["settings"],
-                "min_content_recall": min_content_recall,
                 "prompt_id": prompt_id,
-                "detail": detail,
+                "settings": check_body["settings"],
+                "source": await _source_fingerprint(runtime, resume_id, job_id),
             },
             sort_keys=True,
         )
@@ -328,38 +441,28 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         async def operation() -> dict[str, Any]:
             preview, preview_data = await request_preview(runtime, resume_id, job_id, prompt_id)
             confirmed = await confirm_preview(runtime, preview)
-            tailored_id = confirmed["tailored_resume_id"]
             try:
-                check = await _check_own_output_retrying(runtime, tailored_id, check_body)
-            except ToolError as exc:
+                return await _verify_tailored(runtime, confirmed, preview_data, check_body)
+            except Exception as exc:
+                if isinstance(exc, ToolError):
+                    reason = str(exc)
+                else:
+                    logger.exception("tailor_and_verify parse check failed")
+                    reason = "The parse check failed unexpectedly."
                 raise ToolError(
-                    f"The tailored resume was saved (tailored_resume_id={tailored_id}, "
-                    f"application_id={confirmed['application_id']}), but its parse check "
-                    f"failed: {exc} Run ats_parse_check_resume on it to retry."
+                    f"The tailored resume was saved (tailored_resume_id="
+                    f"{confirmed['tailored_resume_id']}, application_id="
+                    f"{confirmed['application_id']}), but its parse check failed: {reason} "
+                    "Run ats_parse_check_resume on it to retry."
                 ) from exc
-            [template_result] = check.results
-            report = template_result.report
-            if report is None:
-                raise ToolError("The parse check returned no report. Please try again.")
-            ats = preview_data.get("ats_score") or {}
-            result: dict[str, Any] = {
-                "tailored_resume_id": tailored_id,
-                "application_id": confirmed["application_id"],
-                "source_resume_id": confirmed["source_resume_id"],
-                "job_id": confirmed["job_id"],
-                "template": template_result.template,
-                "keyword_score": ats.get("overall_score"),
-                "min_content_recall": min_content_recall,
-                **report_summary(report, min_content_recall),
-            }
-            warnings = [*(preview_data.get("warnings") or []), *confirmed["warnings"]]
-            if warnings:
-                result["warnings"] = warnings
-            if detail:
-                result["keyword_score_detail"] = ats or None
-                result["report"] = check.model_dump(mode="json")
-            return result
 
         return await runtime.run_long_operation(
-            "tailor_and_verify", operation, wait_seconds, ctx, idempotency_key=idempotency_key
+            "tailor_and_verify",
+            operation,
+            wait_seconds,
+            ctx,
+            idempotency_key=idempotency_key,
+            presenter=partial(
+                present_verification, detail=detail, min_content_recall=min_content_recall
+            ),
         )

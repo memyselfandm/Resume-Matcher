@@ -25,6 +25,7 @@ from app.mcp.bridge import MAX_UPLOAD_BYTES
 from app.mcp.tools import ats
 from app.schemas.models import ResumeData
 from app.services.ats_parse import own_output
+from app.services.ats_parse.own_output import OwnOutputParseCheck, TemplateSettings
 from app.services.ats_parse.templates import TEMPLATE_IDS
 from tests.ats_parse_renders import render_pdf, source as render_source
 from tests.integration.test_mcp_server import (
@@ -196,7 +197,8 @@ class TestParseCheckResume:
         assert body["render_locale"] == "en"
         [summary] = body["results"]
         assert summary["template"] == "swiss-single"
-        assert summary["status"] == "ok"
+        assert "status" not in summary and "failing_checks" not in summary
+        assert body["messages"] == {}
         assert summary["passes"] is True
         assert summary["content_recall"] >= 0.95
         assert summary["order_fidelity"] >= 0.95
@@ -242,15 +244,21 @@ class TestParseCheckResume:
         results = body["results"]
         assert [result["template"] for result in results] == list(TEMPLATE_IDS)
         for result in results:
-            assert result["status"] == "ok"
-            failing = {check["id"]: check for check in result["failing_checks"]}
+            assert "status" not in result and "error" not in result
+            failing = {check["id"]: check for check in result.get("failing_checks", [])}
             if result["template"] in TWO_COLUMN_TEMPLATES:
                 assert result["two_column_by_design"] is True
                 assert failing["multi_column"]["expected_by_template"] is True
                 assert failing["multi_column"]["severity"] == "medium"
+                # Explained once for all three templates, not per template.
+                assert "message" not in failing["multi_column"]
             else:
                 assert "two_column_by_design" not in result
                 assert "multi_column" not in failing
+        assert body["messages"]["multi_column"].endswith(
+            "Expected for the selected two-column template."
+        )
+        assert output_size(body) < SUMMARY_LIMIT_BYTES
 
     async def test_busy_check_maps_429_to_retry_hint(
         self, rendered_resume_id: str, monkeypatch: pytest.MonkeyPatch
@@ -357,9 +365,10 @@ class TestTailorAndVerify:
     ) -> None:
         """Column checks never fail a two-column template; recall still decides.
 
-        The committed swiss-two-column render recovers 0.947 of its own source
-        (two-column extraction misses a few lines), so the verdict is checked
-        at 0.9 and, at the 0.95 default, fails on recall alone.
+        The committed swiss-two-column fixture render recovers 0.947 of its
+        own source (extraction garbles a few lines of that render), so the
+        verdict is checked at 0.9 and, at the 0.95 default, fails on recall
+        alone. Both calls share one tailoring run.
         """
         calls: list[str] = []
         async with mcp_session() as (client, _):
@@ -382,6 +391,7 @@ class TestTailorAndVerify:
         assert "Expected for the selected two-column template." in failing["multi_column"]["message"]
         assert default["passes"] is False
         assert default["reasons"] == [f"content_recall {default['content_recall']:g} is below 0.95"]
+        assert default["task_id"] == relaxed["task_id"]
 
     async def test_detail_returns_full_reports(
         self, isolated_db: Database, rendered_resume_id: str
@@ -560,3 +570,145 @@ class TestTailorAndVerify:
         ]
         assert len(tailored) == 1
         assert f"tailored_resume_id={tailored[0]['resume_id']}" in text
+
+
+class TestTailorAndVerifyIdempotency:
+    async def test_detail_and_threshold_reuse_one_run(
+        self, isolated_db: Database, rendered_resume_id: str
+    ) -> None:
+        """Presentation-only arguments never tailor again; the verdict is re-judged."""
+        calls: list[str] = []
+        async with mcp_session() as (client, _):
+            job_id = await add_job(client)
+            call = {"resume_id": rendered_resume_id, "job_id": job_id}
+            with (
+                mocked_tailoring(identity_tailoring()),
+                patch("app.routers.resumes.render_resume_pdf", fixture_render(calls)),
+            ):
+                first = payload(await client.call_tool("tailor_and_verify", call))
+                detailed = payload(
+                    await client.call_tool("tailor_and_verify", {**call, "detail": True})
+                )
+                strict = payload(
+                    await client.call_tool(
+                        "tailor_and_verify", {**call, "min_content_recall": 1.0, "detail": False}
+                    )
+                )
+                polled = payload(await client.call_tool("get_task", {"task_id": first["task_id"]}))
+
+        assert first["task_id"] == detailed["task_id"] == strict["task_id"]
+        assert len(calls) == 1
+        assert (await isolated_db.get_stats())["total_resumes"] == 2
+        assert len(await tailored_cards(isolated_db, first["tailored_resume_id"])) == 1
+        assert detailed["tailored_resume_id"] == strict["tailored_resume_id"] == first["tailored_resume_id"]
+        # detail only adds the stored reports.
+        assert "report" not in first and "report" not in strict
+        assert detailed["report"]["resume_id"] == first["tailored_resume_id"]
+        assert detailed["keyword_score_detail"]["overall_score"] == first["keyword_score"]
+        # Each call reports its own threshold (the verdict flip is covered by
+        # test_threshold_change_flips_the_verdict_without_new_work).
+        assert first["content_recall"] == 1.0
+        assert (first["passes"], first["min_content_recall"]) == (True, 0.95)
+        assert (strict["passes"], strict["min_content_recall"]) == (True, 1.0)
+        # get_task shows the starting call's view.
+        assert polled["result"]["min_content_recall"] == 0.95
+        assert "report" not in polled["result"]
+
+    async def test_threshold_change_flips_the_verdict_without_new_work(
+        self, isolated_db: Database, rendered_resume_id: str
+    ) -> None:
+        improved = identity_tailoring()
+        improved["summary"] = (
+            "Platform engineer who introduced contract testing across twelve partner "
+            "integrations and cut release rollbacks by half."
+        )
+        async with mcp_session() as (client, _):
+            job_id = await add_job(client)
+            call = {"resume_id": rendered_resume_id, "job_id": job_id}
+            with (
+                mocked_tailoring(improved),
+                patch("app.routers.resumes.render_resume_pdf", fixture_render()),
+            ):
+                lenient = payload(await client.call_tool("tailor_and_verify", call))
+                strict = payload(
+                    await client.call_tool("tailor_and_verify", {**call, "min_content_recall": 0.99})
+                )
+        assert 0.95 <= lenient["content_recall"] < 0.99
+        assert strict["task_id"] == lenient["task_id"]
+        assert (lenient["passes"], strict["passes"]) == (True, False)
+        assert "reasons" not in lenient
+        assert strict["reasons"] == [f"content_recall {strict['content_recall']:g} is below 0.99"]
+        assert (await isolated_db.get_stats())["total_resumes"] == 2
+
+    async def test_edited_source_resume_tailors_again(
+        self, isolated_db: Database, rendered_resume_id: str
+    ) -> None:
+        async with mcp_session() as (client, _):
+            job_id = await add_job(client)
+            call = {"resume_id": rendered_resume_id, "job_id": job_id}
+            with (
+                mocked_tailoring(identity_tailoring()),
+                patch("app.routers.resumes.render_resume_pdf", fixture_render()),
+            ):
+                first = payload(await client.call_tool("tailor_and_verify", call))
+                edited = render_source()
+                edited["summary"] = edited["summary"] + " Mentors new engineers."
+                updated = await client.call_tool(
+                    "update_resume", {"resume_id": rendered_resume_id, "resume_data": edited}
+                )
+                assert updated.is_error is False, updated.content
+                second = payload(await client.call_tool("tailor_and_verify", call))
+        assert second["task_id"] != first["task_id"]
+        assert second["tailored_resume_id"] != first["tailored_resume_id"]
+        assert (await isolated_db.get_stats())["total_resumes"] == 3
+
+    async def test_unknown_source_fails_before_any_work(self, isolated_db: Database) -> None:
+        async with mcp_session() as (client, runtime):
+            result = await client.call_tool(
+                "tailor_and_verify", {"resume_id": "missing", "job_id": "missing"}
+            )
+            assert runtime.keyed_tasks == {}
+        assert "Resume not found" in error_text(result)
+
+
+class TestTailorAndVerifyErrors:
+    @pytest.mark.parametrize(
+        ("outcome", "reason"),
+        [
+            ("empty", "The parse check returned no report."),
+            ("crash", "The parse check failed unexpectedly."),
+        ],
+    )
+    async def test_any_failure_after_confirm_names_the_saved_resume(
+        self,
+        isolated_db: Database,
+        rendered_resume_id: str,
+        monkeypatch: pytest.MonkeyPatch,
+        outcome: str,
+        reason: str,
+    ) -> None:
+        async def broken_check(runtime: Any, resume_id: str, body: dict[str, Any]) -> Any:
+            if outcome == "crash":
+                raise KeyError("results")
+            return OwnOutputParseCheck(
+                resume_id=resume_id, render_locale="en", settings=TemplateSettings(), results=[]
+            )
+
+        monkeypatch.setattr(ats, "_post_own_output_check", broken_check)
+        async with mcp_session() as (client, _):
+            job_id = await add_job(client)
+            with mocked_tailoring(identity_tailoring()):
+                result = await client.call_tool(
+                    "tailor_and_verify", {"resume_id": rendered_resume_id, "job_id": job_id}
+                )
+        text = error_text(result)
+        assert reason in text
+        assert "KeyError" not in text and "results" not in text.split("tailored_resume_id")[0]
+        [tailored] = [
+            resume
+            for resume in await isolated_db.list_resumes()
+            if resume.get("parent_id") == rendered_resume_id
+        ]
+        [card] = await tailored_cards(isolated_db, tailored["resume_id"])
+        assert f"tailored_resume_id={tailored['resume_id']}" in text
+        assert f"application_id={card['application_id']}" in text
