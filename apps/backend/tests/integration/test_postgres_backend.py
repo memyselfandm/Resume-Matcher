@@ -77,6 +77,23 @@ async def test_both_engines_run_read_committed_with_bounded_lock_wait(
         assert session.scalar(text("SELECT current_schema()")).startswith("test_")
 
 
+async def test_harness_bounds_every_test_connection(isolated_db: Database) -> None:
+    """The conftest hang guards reach both app engines without displacing
+    the app's own lock_timeout, so a stalled server fails the run."""
+    async with isolated_db._session() as session:
+        raw = await session.connection()
+        params = (await raw.get_raw_connection()).driver_connection.info.get_parameters()
+        assert params["connect_timeout"] == "10"
+        assert params["keepalives_idle"] == "10"
+        assert (await session.scalar(text("SHOW statement_timeout"))) == "1min"
+        assert (
+            await session.scalar(text("SHOW idle_in_transaction_session_timeout"))
+        ) == "1min"
+    with isolated_db._sync() as session:
+        assert session.scalar(text("SHOW statement_timeout")) == "1min"
+        assert session.scalar(text("SHOW lock_timeout")) == "5s"
+
+
 def test_additive_migration_is_idempotent_on_postgres(isolated_db: Database) -> None:
     """PostgreSQL counterpart of the sqlite_only PRAGMA table_info migrations."""
     with side_engine(isolated_db) as engine:
