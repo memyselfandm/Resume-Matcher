@@ -1,0 +1,39 @@
+# Opt-in override: run Resume Matcher on the PostgreSQL service defined in
+# docker-compose.yml (Docker Compose 2.24+). Use both files together:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+#
+# (`--profile postgres` may be added; this file enables that service anyway.)
+#
+# The app keeps its service name, published port (PORT, default 3000),
+# FRONTEND_BASE_URL and the existing `resume-data` volume, so config.json and
+# the .secret_key that decrypts stored API keys carry over. Copy existing
+# SQLite data once, with the app stopped, before the first start:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+#     run --rm -w /app/backend resume-matcher \
+#     python -m app.scripts.migrate_sqlite_to_postgres
+services:
+  # Enabled by this file itself, so `--profile postgres` is optional here.
+  postgres:
+    profiles: !reset []
+
+  resume-matcher:
+    # A separate local tag: building this variant never replaces a pulled
+    # ghcr.io/srbhr/resume-matcher image.
+    image: resume-matcher-postgres:local
+    pull_policy: build
+    build:
+      context: .
+      # Adds only the PostgreSQL driver to the published image; keep the pin
+      # equal to the `postgres` extra in apps/backend/pyproject.toml.
+      dockerfile_inline: |
+        FROM ghcr.io/srbhr/resume-matcher:latest
+        USER root
+        RUN pip install --no-cache-dir "psycopg[binary]==3.3.6"
+        USER appuser
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+psycopg://${POSTGRES_USER:-resume_matcher}:${POSTGRES_PASSWORD:-resume_matcher}@postgres:5432/${POSTGRES_DB:-resume_matcher}

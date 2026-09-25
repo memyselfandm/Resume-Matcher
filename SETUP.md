@@ -349,15 +349,21 @@ LOG_LEVEL=INFO LOG_LLM=DEBUG docker compose up -d
 > allow a message for it to appear. If you set `LITELLM_LOG` from LiteLLM docs,
 > make sure `LOG_LLM` is set to an equal or lower level.
 
-### Optional PostgreSQL (Compose profile)
+### Optional PostgreSQL (Compose override)
 
-The default `docker compose up` is unchanged. The `postgres` profile adds a PostgreSQL 17 container and a `resume-matcher-postgres` app. That app is built on top of the regular image with the backend's `postgres` extra, and it listens on `POSTGRES_APP_PORT` (default `3001`):
+The default `docker compose up` is unchanged. `docker-compose.yml` defines a PostgreSQL 17 service that stays off unless enabled. The opt-in override `docker-compose.postgres.yml` turns it on and runs the same `resume-matcher` service against it. It keeps the same port and the same `resume-data` volume, so `config.json` and the `.secret_key` that decrypts your stored API keys carry over. The override builds a local `resume-matcher-postgres:local` image: `ghcr.io/srbhr/resume-matcher:latest` plus the pinned PostgreSQL driver. Your pulled image is never retagged. Requires Docker Compose 2.24 or later.
 
 ```bash
-docker compose --profile postgres up -d resume-matcher-postgres
+# 1. Stop the SQLite app, then copy its data once (refuses a non-empty target without --force)
+docker compose stop resume-matcher
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+  run --rm -w /app/backend resume-matcher \
+  python -m app.scripts.migrate_sqlite_to_postgres
+# 2. Start on PostgreSQL
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 ```
 
-Set `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` to override the defaults (change the password for anything beyond local use).
+The copy verifies row counts and per-row content hashes before committing. It also checks that the copied API keys decrypt with the volume's `.secret_key`, and aborts otherwise. To go back to SQLite, run plain `docker compose up -d`. The SQLite file is left untouched, but it will not contain writes made while running on PostgreSQL. Set `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` to override the defaults (change the password for anything beyond local use).
 
 ### Important Notes
 
@@ -464,11 +470,12 @@ cd apps/backend
 uv sync --extra postgres
 # In .env (postgres:// and postgresql:// URLs are also accepted)
 DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/resume_matcher
-# Optional: copy existing SQLite data (refuses a non-empty target without --force)
+# Optional: with the app stopped, copy existing SQLite data
+# (refuses a non-empty target without --force)
 uv run python -m app.scripts.migrate_sqlite_to_postgres
 ```
 
-`config.json` and `.secret_key` stay in `apps/backend/data/`. Keep `.secret_key`, because it decrypts the API keys stored in the database. On Windows, run the PostgreSQL backend via Docker or WSL: psycopg's async mode does not support Windows' default event loop.
+`config.json` and `.secret_key` stay in `apps/backend/data/` (or `DATA_DIR`). Run the copy and the app with the same `DATA_DIR`, because its `.secret_key` decrypts the API keys stored in the database. The copy aborts if none of the copied keys decrypt with it; pass `--allow-undecryptable-keys` only if the original secret is lost. The copy first applies the app's usual additive schema update to the SQLite file, the same one the app runs at startup. On Windows, run the PostgreSQL backend via Docker or WSL: psycopg's async mode does not support Windows' default event loop.
 
 ---
 
