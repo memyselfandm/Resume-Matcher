@@ -1,9 +1,10 @@
 """Copy a Resume Matcher SQLite database into PostgreSQL, verified.
 
 Every table is copied in foreign-key-safe order inside **one** PostgreSQL
-transaction that also holds the application's global writer lock, then
-verified before commit: per-table row counts and a per-row content hash
-(canonical JSON of every column, keyed by primary key) must match the source.
+transaction that also holds the application's writer lock for the target
+schema, then verified before commit: per-table row counts and a per-row content
+hash (canonical JSON of every column, keyed by primary key) must match the
+source.
 Any mismatch rolls the whole copy back.
 
 API keys are copied as ciphertext, unchanged. They stay decryptable only with
@@ -32,7 +33,7 @@ from sqlalchemy import Table, delete, func, select, text
 from sqlalchemy.engine import Connection
 
 from app.config import settings
-from app.database import POSTGRES_WRITER_LOCK_KEY
+from app.database import POSTGRES_WRITER_LOCK_ARGS
 from app.db_engine import init_models_sync, make_sync_engine
 from app.models import Base
 
@@ -102,7 +103,7 @@ def migrate(sqlite_path: Path, database_url: str, *, force: bool = False) -> dic
         init_models_sync(target)
         tables = _tables()
         with source.connect() as src, target.begin() as dst:
-            dst.execute(text(f"SELECT pg_advisory_xact_lock({POSTGRES_WRITER_LOCK_KEY})"))
+            dst.execute(text(f"SELECT pg_advisory_xact_lock({POSTGRES_WRITER_LOCK_ARGS})"))
             existing = {
                 table.name: int(dst.scalar(select(func.count()).select_from(table)) or 0)
                 for table in tables

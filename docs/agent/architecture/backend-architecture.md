@@ -105,7 +105,7 @@ so they run on either backend.
 **Single-master invariant** is enforced by a partial unique index on `is_master`
 (`WHERE is_master = 1` on SQLite, `WHERE is_master` on PostgreSQL).
 Master replacement and tracker read-modify-write operations reserve the writer
-(`BEGIN IMMEDIATE` on SQLite, a global `pg_advisory_xact_lock` on PostgreSQL),
+(`BEGIN IMMEDIATE` on SQLite, a per-schema `pg_advisory_xact_lock` on PostgreSQL),
 including across Database instances. ISO-8601 timestamp columns use the `C`
 collation on PostgreSQL so lexical comparison stays byte order.
 **Jobs' dynamic fields** (`job_keywords`, `job_keywords_hash`, `company`/`role`,

@@ -12,7 +12,7 @@ All asynchronous mutations use this write context. Synchronous encrypted-key mut
 
 ## PostgreSQL backend
 
-With `DATABASE_URL` set, `_write_session()` and `_sync_write_session()` both run `SELECT pg_advisory_xact_lock(POSTGRES_WRITER_LOCK_KEY)` as the first statement instead of `BEGIN IMMEDIATE`. One key serializes every writer, async documents and sync `api_keys` alike, so the invariants above hold unchanged. The lock is released when the transaction commits or rolls back. There is no write-throughput gain; PostgreSQL is offered for durability, backups and remote or shared hosting.
+With `DATABASE_URL` set, `_write_session()` and `_sync_write_session()` both run `SELECT pg_advisory_xact_lock(POSTGRES_WRITER_LOCK_KEY, hashtext(current_schema()))` as the first statement instead of `BEGIN IMMEDIATE`. One key per schema serializes every writer on that schema's tables, async documents and sync `api_keys` alike, so the invariants above hold unchanged. Advisory locks are database-wide, so the schema half of the key keeps deployments (or test runs) in different schemas of one database from serializing each other; SQLite's lock is likewise per database file. The lock is released when the transaction commits or rolls back. There is no write-throughput gain; PostgreSQL is offered for durability, backups and remote or shared hosting.
 
 - Both engines are forced to `READ COMMITTED`. Each statement after the lock must see rows committed by the previous writer. Under `REPEATABLE READ` the snapshot would predate the lock.
 - Every connection sets `lock_timeout=5s`, the counterpart of SQLite's `busy_timeout`. SQLSTATE `55P03` (lock not available), `40001` (serialization failure) and `40P01` (deadlock) become `DatabaseBusyError` → HTTP 503 with `Retry-After: 1`.

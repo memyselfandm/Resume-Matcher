@@ -2,7 +2,7 @@
 
 Runs on SQLite by default and on PostgreSQL when TEST_DATABASE_URL is set: the
 competing writer takes the same reservation the app uses (``BEGIN IMMEDIATE`` or
-the global advisory lock) and only the wait is shortened.
+the per-schema advisory lock) and only the wait is shortened.
 """
 
 from collections.abc import Iterator

@@ -12,7 +12,7 @@ named by ``DATABASE_URL``):
   synchronous LLM hot path (``get_llm_config`` → ``resolve_api_key``).
 
 Writes on both engines take one global writer reservation: ``BEGIN IMMEDIATE``
-on SQLite, a transaction-scoped advisory lock on PostgreSQL.
+on SQLite, a per-schema transaction-scoped advisory lock on PostgreSQL.
 """
 
 import copy
@@ -67,10 +67,19 @@ APPLICATION_STATUSES: tuple[str, ...] = (
 ProcessingFinishOutcome = Literal["committed", "stale", "missing"]
 
 
-# Key of the PostgreSQL transaction-scoped advisory lock that serializes every
-# writer (async documents and sync api_keys alike), mirroring SQLite's single
-# reserved writer. Any stable bigint works; this one spells "RMWR".
+# Class key of the PostgreSQL transaction-scoped advisory lock that serializes
+# every writer (async documents and sync api_keys alike), mirroring SQLite's
+# single reserved writer. Any stable int4 works; this one spells "RMWR".
 POSTGRES_WRITER_LOCK_KEY = 0x524D5752
+# Advisory locks are database-wide, so the second key scopes the reservation to
+# the schema the tables live in (``search_path``): deployments or test runs in
+# different schemas of one database never serialize each other, while every
+# writer on the same tables still does. ``coalesce`` keeps the lock taken even
+# if no schema resolves: pg_advisory_xact_lock is strict and would silently
+# return without locking on a NULL argument.
+POSTGRES_WRITER_LOCK_ARGS = (
+    f"{POSTGRES_WRITER_LOCK_KEY}, hashtext(coalesce(current_schema(), ''))"
+)
 
 # lock_not_available (lock_timeout), serialization_failure, deadlock_detected.
 _POSTGRES_BUSY_SQLSTATES = frozenset({"55P03", "40001", "40P01"})
@@ -166,9 +175,9 @@ class Database:
 
     @property
     def _reserve_writer(self) -> TextClause:
-        """First statement of every write transaction (global writer lock)."""
+        """First statement of every write transaction (the writer reservation)."""
         if self.dialect == "postgresql":
-            return text(f"SELECT pg_advisory_xact_lock({POSTGRES_WRITER_LOCK_KEY})")
+            return text(f"SELECT pg_advisory_xact_lock({POSTGRES_WRITER_LOCK_ARGS})")
         return text("BEGIN IMMEDIATE")
 
     # -- engine / session plumbing ------------------------------------------
