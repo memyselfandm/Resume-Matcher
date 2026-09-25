@@ -66,6 +66,18 @@ letter spacing (`S U M M A R Y`) as breaks that pdftotext does not. On the
 real template renders gaps inside words reach 0.11 above the line's typical
 gap and the narrowest gap between words is 0.19.
 
+Known limitations of the word-break rule:
+
+- A line whose gaps are mostly word gaps without drawn space glyphs (spaced
+  initials such as `A B C D E F`) takes those gaps as its typical gap and
+  reads as one word, as pdftotext does.
+- Gaps between words of about 0.12-0.15 em without a drawn space glyph merge
+  the words (e.g. `1 000 000` set with narrow positioning gaps). Drawn
+  U+202F or thin-space glyphs are kept.
+- Lines with fewer than 4 glyph pairs use the absolute 0.15 threshold, so
+  short letter-spaced text (e.g. a few letter-spaced CJK characters) can
+  still split.
+
 | Status | Meaning |
 |--------|---------|
 | 200 | Report returned (including `.doc`, reported as `unsupported_format`) |
@@ -191,7 +203,9 @@ print URL are the download route's own. Nothing is stored.
   template. With `PDF_MAX_CONCURRENCY=1` a busy slot is a user's download, so
   instead of three attempts the check polls it every second until it frees
   (`render_attempts` counts the polls). Waiting counts against the budget;
-  templates it cannot reach are `timed_out`.
+  templates it cannot reach are `timed_out`. Known limitation: a slot held
+  for long enough (or repeatedly) can make one template spend the whole sweep
+  budget polling, and the later templates then report `timed_out`.
 
 Response:
 
@@ -298,9 +312,15 @@ not narrow enough to count separately (vivid: 0.35).
 
 Extraction agreement with poppler's `pdftotext` (whitespace tokens after NFKC
 and case folding, multiset F1): 0.998 on the eight Linux renders, 0.991 on
-earlier macOS renders (the difference is the U+F765 glyphs below), 1.000 on
-the synthetic upload fixtures. The remaining Linux differences are vivid
-headings that pdftotext itself splits (`E XPERIENCE`).
+earlier macOS renders (the difference is the U+F765 glyphs below), and 1.000
+on the synthetic PDF fixtures with an ordinary text layer
+(`balanced_two_column`, `clean_single_column`, `icon_font`, `spanish`,
+`swiss_single_like`, `two_column`). `cid_glyphs`, `rotated_watermark`, and
+`twelve_pages` differ from pdftotext by design (unmapped CID glyphs are
+reported as `(cid:N)`, rotated text is kept as its own row, and pages past the
+10-page cap are not read); `image_only` and `decompression_bomb` have no
+comparable text. The remaining Linux differences are vivid headings that
+pdftotext itself splits (`E XPERIENCE`).
 
 Findings on these renders (reported, not suppressed):
 
