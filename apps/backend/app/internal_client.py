@@ -92,16 +92,18 @@ class _ExceptionLoggingApp:
     responses without logging; this keeps the traceback in the server log.
     """
 
-    def __init__(self, app: ASGIApp, log: logging.Logger) -> None:
+    def __init__(self, app: ASGIApp, log: logging.Logger, label: str) -> None:
         self._app = app
         self._log = log
+        self._label = label
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         try:
             await self._app(scope, receive, send)
         except Exception:
             self._log.exception(
-                "Unhandled exception in internal request %s %s",
+                "Unhandled exception in %s request %s %s",
+                self._label,
                 scope.get("method"),
                 scope.get("path"),
             )
@@ -111,8 +113,9 @@ class _ExceptionLoggingApp:
 class InternalClient:
     """HTTP client bound to the FastAPI app through ``httpx.ASGITransport``.
 
-    ``log`` receives unhandled route exceptions and 5xx warnings, so a caller
-    (such as the MCP bridge) can keep them under its own logger name.
+    ``log`` receives unhandled route exceptions and 5xx warnings and
+    ``label`` names the caller in them, so a caller (such as the MCP bridge)
+    keeps its own logger name and wording.
     """
 
     def __init__(
@@ -121,13 +124,15 @@ class InternalClient:
         *,
         base_url: str = INTERNAL_BASE_URL,
         log: logging.Logger = logger,
+        label: str = "internal",
     ) -> None:
         self._log = log
+        self._label = label
         # Routes bound their own work, so the client applies no timeout;
         # callers wrap requests in their own deadlines.
         self._client = httpx.AsyncClient(
             transport=httpx.ASGITransport(
-                app=_ExceptionLoggingApp(app, log), raise_app_exceptions=False
+                app=_ExceptionLoggingApp(app, log, label), raise_app_exceptions=False
             ),
             base_url=base_url,
             timeout=None,
@@ -161,7 +166,13 @@ class InternalClient:
         if response.is_success:
             return response
         if response.status_code >= 500:
-            self._log.warning("Internal %s %s returned %s", method, path, response.status_code)
+            self._log.warning(
+                "%s %s %s returned %s",
+                self._label[:1].upper() + self._label[1:],
+                method,
+                path,
+                response.status_code,
+            )
         raise InternalRequestError(
             _error_message(response),
             response.status_code,

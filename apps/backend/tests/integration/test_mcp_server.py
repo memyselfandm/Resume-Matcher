@@ -461,7 +461,7 @@ class TestErrorMapping:
         assert_no_internals(text)
         logged = [r for r in caplog.records if r.name == "app.mcp.bridge" and r.exc_info]
         assert len(logged) == 1
-        assert "GET /api/v1/jobs/any" in logged[0].getMessage()
+        assert logged[0].getMessage() == "Unhandled exception in MCP bridge request GET /api/v1/jobs/any"
         assert "secret.db is corrupt" in str(logged[0].exc_info[1])
 
 
