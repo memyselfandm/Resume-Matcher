@@ -10,7 +10,9 @@ reach the application through an in-process ASGI bridge (`bridge.py`): each
 tool is a thin HTTP client of the same `/api/v1` routes the web UI calls, so
 validation, AI time budgets, error translation and side effects (preview
 claims, tracker auto-creation) are identical to the UI. No router code is
-duplicated.
+duplicated. The bridge is built on the neutral in-process client
+`app/internal_client.py` (also used by the own-output parse check) and only
+adds MCP tool-error mapping and upload guards.
 
 - SDK: `mcp==2.2.0` (`MCPServer`). Protocol: **2026-07-28** (stateless
   per-request envelope, `server/discover`) and the handshake era
@@ -213,10 +215,133 @@ refuses any route path that is not made of such segments.
 | `generate_outreach(resume_id, wait_seconds?)` | `POST /resumes/{id}/generate-outreach` | Long op; tailored resumes only. |
 | `generate_interview_prep(resume_id, wait_seconds?)` | `POST /resumes/{id}/generate-interview-prep` | Long op; tailored resumes only. |
 | `export_resume_pdf(resume_id, template?, page_size?, out_path?, wait_seconds?)` | `GET /resumes/{id}/pdf` | Long op. Seven templates. `out_path` (stdio) writes a file; otherwise base64. |
+| `ats_parse_check_file(path \| filename + content_base64, content_language?, detail?, wait_seconds?)` | `POST /ats/parse-check` | Long op. Can an ATS-style extractor read this file? Nothing stored. Same 4 MB / suffix guards as `upload_resume`; `path` is stdio-only. |
+| `ats_parse_check_resume(resume_id, settings?, all_templates?, content_language?, render_locale?, detail?, wait_seconds?)` | `POST /resumes/{id}/parse-check` | Long op. Parse-checks the PDF a user would download. `render_locale` sets `settings.lang`. A busy server (429) becomes a tool error with a "Retry in N seconds" hint. |
+| `tailor_and_verify(resume_id, job_id, template?, settings?, min_content_recall=0.95, prompt_id?, detail?, wait_seconds?)` | preview -> confirm -> `POST /resumes/{id}/parse-check` | Long op. One call: tailor, save, parse-check the saved result. See below. |
 | `list_applications(status?)` | `GET /applications` | Cards grouped by column. |
 | `create_application(...)` | `POST /applications` | Manual card; not needed after `tailor_resume_confirm`. |
 | `update_application(application_id, ...)` | `PATCH /applications/{id}` | Only provided fields change. |
 | `get_task(task_id)` / `cancel_task(task_id)` | task registry | Poll or cancel long operations. |
+
+### ATS parse-check tools
+
+All three are deterministic after tailoring (no LLM in the check) and return a
+**summary** by default: a verdict, scores, and the failing checks rendered in
+English from `app/services/ats_parse/messages_en.py`. `detail=true` adds the
+full report (`report`) exactly as the REST route returns it.
+
+**Bounded by design.** Default (non-`detail`) output stays under 2 KB whatever
+the report contains, because every variable part is capped
+(`app/mcp/tools/ats.py`):
+
+| Part | Cap |
+|---|---|
+| `failing_checks` per summary | 3 most severe (fatal, high, medium, low), then `more_failing_checks: N` |
+| List params inside a message | first 5 items, then `and N more`; each item clipped to 40 characters |
+| Message | 200 characters; a check the English catalog cannot render gets "No English message for this check; params: {...}" (bounded the same way) |
+| Check id | 32 characters |
+| `reasons` | recall reason plus at most 3 fatal/high ids, then `and N more` |
+| `warnings` (`tailor_and_verify`) | first 2, each clipped to 160 characters, then `and N more` |
+| `all_templates` rows | no messages or `content_score`; `top_failing_checks` = 2 `"id (severity)"` strings, then `more_failing_checks: N` |
+
+`tests/integration/test_mcp_ats_tools.py::TestSummaryBound` feeds every tool a
+synthetic worst case (every known check failing with 25-item parameter lists,
+an unknown check, 20 long warnings, all seven templates) and asserts each
+default output is under 2048 bytes; `detail=true` still returns every check and
+the full parameters and warnings.
+
+**Verdict (`passes`).** `content_recall >= min_content_recall` (0.95 by
+default; only when a round trip was computed, so not for uploaded files) **and**
+no check with `status=fail` at severity `fatal` or `high`. For two-column
+templates (`swiss-two-column`, `modern-two-column`, `vivid`) the engine reports
+`multi_column`/`sidebar` at `medium` with `expected_by_template: true`, so the
+chosen layout never fails the verdict on its own. When `passes` is false,
+`reasons` says why.
+
+Summary shape of `tailor_and_verify` (on the committed swiss-two-column fixture
+render, which recovers 0.947 of its own source; hence `min_content_recall=0.9`
+in this example):
+
+```json
+{
+  "status": "succeeded",
+  "task_id": "3ef46a3e...",
+  "tailored_resume_id": "1724da4e-...",
+  "application_id": "08a37d6c-...",
+  "source_resume_id": "720a6213-...",
+  "job_id": "c8167d5b-...",
+  "template": "swiss-two-column",
+  "keyword_score": 75.0,
+  "min_content_recall": 0.9,
+  "passes": true,
+  "parseability_score": 90,
+  "content_score": 90,
+  "content_recall": 0.947,
+  "order_fidelity": 0.729,
+  "failing_checks": [
+    {
+      "id": "multi_column",
+      "severity": "medium",
+      "message": "Multi-column layout detected. An ATS may read the columns out of order. Expected for the selected two-column template.",
+      "expected_by_template": true
+    }
+  ]
+}
+```
+
+A failing run adds `"reasons": ["content_recall 0 is below 0.95", "fatal/high
+checks failed: text_layer, text_as_image"]`. `keyword_score` is the
+job-keyword score from the preview (`ats_score.overall_score`); with
+`detail=true` the full `keyword_score_detail` (sub-scores, missing keywords) and
+the parse-check `report` are included. Preview and confirm `warnings` are
+passed through when present.
+
+`ats_parse_check_resume` returns `{resume_id, render_locale, results[]}`. For
+one template the entry is the full summary: `template`, the verdict fields
+(verdict at the 0.95 default), `failing_checks` with messages, `reasons`, and
+`two_column_by_design: true` where applicable. With `all_templates` each entry
+is a comparison row: `template`, `two_column_by_design`, `passes`,
+`parseability_score`, `content_recall`, `order_fidelity`,
+`top_failing_checks` (for example `["multi_column (medium)",
+"section_headings (medium)"]`) and `more_failing_checks`; check one template
+(or pass `detail=true`) for the explanations. A template that could not be
+rendered in `all_templates` mode carries `status: render_failed | timed_out`
+and `error` instead of a verdict (checked templates have no `status` field).
+`ats_parse_check_file` returns
+`file_format`, `extractability`, `content_language` and the verdict fields.
+
+**Persistence (`tailor_and_verify`).** The tailored resume and its tracker card
+are created by the confirm step before the check runs and are **kept even
+when `passes` is false** - it is a valid tailored resume; nothing is rolled
+back. Fix the content (`update_resume`) or try another template
+(`ats_parse_check_resume`), or delete it in the web UI. If the parse check
+itself cannot run (renderer busy after three attempts that honour
+`Retry-After`, renderer down), the tool fails with a message naming the saved
+`tailored_resume_id` and `application_id` so the check can be retried with
+`ats_parse_check_resume`.
+
+**Idempotency (`tailor_and_verify`).** A run is keyed by the inputs that change
+what gets created: `resume_id`, `job_id`, `prompt_id`, the merged template
+settings, and a SHA-256 of the source resume's content (`processed_resume` and
+the raw upload text) and the job description text, fetched when the call is
+made. Content is hashed rather than `updated_at` because jobs have no
+`updated_at`. A call with the same key while the run is in progress joins it
+(same `task_id`); after it succeeded, the stored result is returned (for the
+task retention of one hour) instead of tailoring again, so a lost response
+never creates a second tailored resume or tracker card. Editing the source
+resume or the job changes the key and starts a new run. `detail` and
+`min_content_recall` are **not** part of the key: the task stores the full
+result, and each call projects it for itself, recomputing `passes`/`reasons`
+for its own `min_content_recall` and including `report`/`keyword_score_detail`
+only with `detail=true`. `get_task` shows the view of the call that started the
+run. A failed or cancelled run is not reused. Any failure after the confirm
+step (renderer unavailable, an unexpected error) is reported as a tool error
+that names the saved `tailored_resume_id` and `application_id`.
+
+**Renderer.** The own-output tools need the same render path as
+`export_resume_pdf` (`get_status.pdf_export_ready`). Only one own-output check
+runs per process; `ats_parse_check_resume` reports a busy server as a tool
+error with a retry hint, `tailor_and_verify` waits and retries.
 
 Resources: `resume://{resume_id}` (Markdown) and `job://{job_id}` (plain
 text). An unknown id returns JSON-RPC error `-32602`.
@@ -280,10 +405,37 @@ Caches and tasks are process-local, which matches the single-process backend.
 8. `update_application(application_id, notes="Applied via portal", applied_at="2026-09-23")`
    - update the auto-created card; do not create a second one.
 
+### Tailor, verify, export, track
+
+Steps 4-5 plus an ATS check in one call:
+
+1. `tailor_and_verify(resume_id, job_id, template="swiss-single")` - if
+   `status` is `running`, poll `get_task(task_id)` (or repeat the same call; it
+   joins the task). Note `tailored_resume_id` and `application_id`.
+2. If `passes` is false, read `reasons` and `failing_checks`: fix the content
+   with `update_resume` and re-check with
+   `ats_parse_check_resume(tailored_resume_id, settings={"template": ...})`, or
+   compare templates with `all_templates=true`. The tailored resume already
+   exists either way.
+3. `export_resume_pdf(tailored_resume_id, template=<the verified template>, out_path="~/cv-acme.pdf")`.
+4. `update_application(application_id, status="applied", notes="ATS check passed (recall 0.99); applied via portal")`
+   on the card `tailor_and_verify` created - do not create another.
+
+To check a file that did not come from Resume Matcher (an old CV, a
+recruiter's template): `ats_parse_check_file(path="~/cv.pdf")` (stdio) or
+`ats_parse_check_file(filename="cv.pdf", content_base64=...)`.
+
 ## Tests
 
 - `tests/unit/test_mcp_components.py` - preview cache, task registry, bridge
   error mapping, upload guards, wait policy, Markdown rendering, instance id.
+- `tests/unit/test_mcp_ats_summary.py` - the `passes` rule, failing-check
+  rendering, per-template summaries, settings shortcuts, `Retry-After` parsing.
+- `tests/integration/test_mcp_ats_tools.py` - the three ATS tools against the
+  real routers with mocked LLM services and the committed real template
+  renders standing in for Chromium: file and stored-resume checks, 429 and
+  invalid-id mapping, `tailor_and_verify` pass/fail/two-column paths, task
+  handles, idempotent retries, persistence on failure, summary size.
 - `tests/integration/test_mcp_server.py` - SDK in-process client against the
   real app and an isolated database: tool snapshot, cache hints, both eras,
   full tailoring flow, error mapping, upload limits, task polling,

@@ -22,7 +22,7 @@ from app.mcp.runtime import MCPRuntime
 ResumeFormat = Literal["summary", "json", "markdown"]
 
 
-def _read_local_file(path: str) -> tuple[str, bytes]:
+def read_local_file(path: str) -> tuple[str, bytes]:
     """Read an upload from disk after checking its type and size."""
     file_path = Path(path).expanduser()
     if not file_path.is_file():
@@ -32,7 +32,7 @@ def _read_local_file(path: str) -> tuple[str, bytes]:
     return file_path.name, file_path.read_bytes()
 
 
-def _decode_base64(content_base64: str) -> bytes:
+def decode_base64(content_base64: str) -> bytes:
     """Decode an upload payload, refusing oversized input before decoding."""
     # MIME-style encoders wrap lines (e.g. every 76 characters); whitespace
     # carries no data, so drop it before strict decoding.
@@ -80,12 +80,12 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         if path is not None:
             if not runtime.local_files_allowed:
                 raise ToolError("path uploads are only available on the stdio transport; use content_base64.")
-            name, content = _read_local_file(path)
+            name, content = read_local_file(path)
         else:
             if not filename:
                 raise ToolError("filename is required with content_base64.")
             upload_content_type(filename)
-            name, content = filename, _decode_base64(content_base64 or "")
+            name, content = filename, decode_base64(content_base64 or "")
         body = await runtime.bridge.upload("/resumes/upload", name, content)
         return {
             "resume_id": body["resume_id"],

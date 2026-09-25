@@ -133,6 +133,18 @@ def test_hidden_section_is_hidden_not_missing(template: str) -> None:
     assert "Youth Coding Club" not in _text(template)
 
 
+@pytest.mark.parametrize("template", TEMPLATE_IDS)
+def test_visible_custom_item_section_is_found(template: str) -> None:
+    fields = _fields(template)
+    publications = {path: status for path, status in fields.items() if "publications" in path}
+    if manifest()["platform"] == "darwin" and template in ("clean", "vivid"):
+        # The subtitle is small caps: U+F765 on macOS (see the small-caps test).
+        publications.pop("customSections.publications[0].subtitle")
+    assert set(publications.values()) == {"found"}
+    assert "customSections.publications[0].description[0]" in publications
+    assert fields["heading.volunteering"] == "hidden"
+
+
 @pytest.mark.parametrize("template", TWO_COLUMN)
 def test_two_column_additional_heading_is_not_rendered(template: str) -> None:
     """Two-column templates print fixed per-list headings instead."""

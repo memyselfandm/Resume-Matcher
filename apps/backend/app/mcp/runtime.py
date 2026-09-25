@@ -14,7 +14,7 @@ from pydantic import Field
 from app.config import settings
 from app.mcp.bridge import AppBridge
 from app.mcp.previews import PreviewCache
-from app.mcp.tasks import TaskRegistry
+from app.mcp.tasks import Presenter, TaskRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +96,7 @@ class MCPRuntime:
         wait_seconds: float | None,
         ctx: Context | None = None,
         idempotency_key: str | None = None,
+        presenter: Presenter | None = None,
     ) -> dict[str, Any]:
         """Run ``operation`` as a task and wait for it within the wait budget.
 
@@ -103,7 +104,9 @@ class MCPRuntime:
         finishes in time, otherwise ``{"status": "running", "task_id": ...}``
         for polling with ``get_task``. With ``idempotency_key``, a call made
         while an earlier task for the same key is running or has succeeded
-        waits on that task instead of starting another.
+        waits on that task instead of starting another. ``presenter`` shapes
+        the stored result for this call (and, for the call that starts the
+        task, for ``get_task``), so joined calls can each see their own view.
 
         Raises:
             ToolError: If the operation fails or is cancelled within the wait.
@@ -115,7 +118,7 @@ class MCPRuntime:
             if existing is not None and existing.status in ("running", "succeeded"):
                 record = existing
         if record is None:
-            record = self.tasks.start(name, operation)
+            record = self.tasks.start(name, operation, presenter)
             if idempotency_key is not None:
                 # Forget keys whose tasks have expired from the registry.
                 for key, task_id in list(self.keyed_tasks.items()):
@@ -136,7 +139,12 @@ class MCPRuntime:
             await _heartbeat(ctx, loop.time() - started, name)
 
         if record.status == "succeeded":
-            result = {"status": "succeeded", "task_id": record.task_id, **(record.result or {})}
+            stored = record.result or {}
+            result = {
+                "status": "succeeded",
+                "task_id": record.task_id,
+                **(presenter(stored) if presenter else stored),
+            }
             record.mark_delivered()
             return result
         if record.status in ("failed", "cancelled"):
