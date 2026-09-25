@@ -19,6 +19,8 @@ def test_unstubbed_provider_connection_is_denied() -> None:
         socket.create_connection(("api.openai.com", 443))
 
 
+# The TinyDB importer runs only on SQLite (PostgreSQL never held TinyDB data).
+@pytest.mark.sqlite_only
 async def test_real_startup_migrates_only_temporary_storage(
     isolated_backend_state: Any,
     tmp_path: Path,
