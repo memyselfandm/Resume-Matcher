@@ -37,11 +37,15 @@ class InvalidIdentifierError(ValueError):
 
 
 class InternalRequestError(Exception):
-    """A non-2xx route response, carrying the route's client-safe detail."""
+    """A non-2xx route response, carrying the route's client-safe detail.
 
-    def __init__(self, message: str, status_code: int) -> None:
+    ``retry_after`` is the response's ``Retry-After`` header, if any.
+    """
+
+    def __init__(self, message: str, status_code: int, retry_after: str | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.retry_after = retry_after
 
 
 def path_segment(value: str, name: str = "id") -> str:
@@ -65,6 +69,17 @@ def _error_message(response: httpx.Response) -> str:
     detail = body.get("detail") if isinstance(body, dict) else None
     if isinstance(detail, str) and detail.strip():
         return detail
+    if isinstance(detail, list):
+        # FastAPI request-validation errors: report field locations and messages only.
+        parts: list[str] = []
+        for item in detail:
+            if not isinstance(item, dict):
+                continue
+            location = ".".join(str(part) for part in item.get("loc", ()) if part != "body")
+            message = item.get("msg", "invalid value")
+            parts.append(f"{location}: {message}" if location else str(message))
+        if parts:
+            return "Invalid request: " + "; ".join(parts)
     if response.status_code >= 500:
         return GENERIC_SERVER_ERROR
     return f"Request failed with status {response.status_code}."
@@ -77,14 +92,15 @@ class _ExceptionLoggingApp:
     responses without logging; this keeps the traceback in the server log.
     """
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, log: logging.Logger) -> None:
         self._app = app
+        self._log = log
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         try:
             await self._app(scope, receive, send)
         except Exception:
-            logger.exception(
+            self._log.exception(
                 "Unhandled exception in internal request %s %s",
                 scope.get("method"),
                 scope.get("path"),
@@ -93,16 +109,27 @@ class _ExceptionLoggingApp:
 
 
 class InternalClient:
-    """HTTP client bound to the FastAPI app through ``httpx.ASGITransport``."""
+    """HTTP client bound to the FastAPI app through ``httpx.ASGITransport``.
 
-    def __init__(self, app: ASGIApp) -> None:
+    ``log`` receives unhandled route exceptions and 5xx warnings, so a caller
+    (such as the MCP bridge) can keep them under its own logger name.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        base_url: str = INTERNAL_BASE_URL,
+        log: logging.Logger = logger,
+    ) -> None:
+        self._log = log
         # Routes bound their own work, so the client applies no timeout;
         # callers wrap requests in their own deadlines.
         self._client = httpx.AsyncClient(
             transport=httpx.ASGITransport(
-                app=_ExceptionLoggingApp(app), raise_app_exceptions=False
+                app=_ExceptionLoggingApp(app, log), raise_app_exceptions=False
             ),
-            base_url=INTERNAL_BASE_URL,
+            base_url=base_url,
             timeout=None,
         )
 
@@ -111,7 +138,14 @@ class InternalClient:
         await self._client.aclose()
 
     async def request(
-        self, method: str, path: str, *, params: dict[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: Any = None,
+        data: dict[str, str] | None = None,
+        files: dict[str, tuple[str, bytes, str]] | None = None,
     ) -> httpx.Response:
         """Send a request to ``/api/v1{path}`` and return the 2xx response.
 
@@ -121,12 +155,18 @@ class InternalClient:
         """
         if ROUTE_PATH_PATTERN.fullmatch(path) is None:
             raise InvalidIdentifierError("Invalid route path.")
-        response = await self._client.request(method, f"{API_PREFIX}{path}", params=params)
+        response = await self._client.request(
+            method, f"{API_PREFIX}{path}", params=params, json=json, data=data, files=files
+        )
         if response.is_success:
             return response
         if response.status_code >= 500:
-            logger.warning("Internal %s %s returned %s", method, path, response.status_code)
-        raise InternalRequestError(_error_message(response), response.status_code)
+            self._log.warning("Internal %s %s returned %s", method, path, response.status_code)
+        raise InternalRequestError(
+            _error_message(response),
+            response.status_code,
+            retry_after=response.headers.get("Retry-After"),
+        )
 
     async def get_json(self, path: str, *, params: dict[str, Any] | None = None) -> Any:
         """GET a route and decode its JSON body."""
