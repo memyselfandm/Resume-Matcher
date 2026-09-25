@@ -23,7 +23,7 @@ from app.mcp.tools.tailoring import confirm_preview, request_preview
 from app.routers.parse_check import ContentLanguage
 from app.services.ats_parse.messages_en import render_message
 from app.services.ats_parse.own_output import OwnOutputParseCheck, TemplateSettings
-from app.services.ats_parse.report import ParseCheckReport
+from app.services.ats_parse.report import CheckResult, ParseCheckReport
 from app.services.ats_parse.templates import RenderLocale, TemplateId
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,23 @@ PARSE_CHECK_BUSY_ATTEMPTS = 3
 PARSE_CHECK_BUSY_MAX_WAIT_SECONDS = 30.0
 DEFAULT_RETRY_AFTER_SECONDS = 10.0
 
+# Default (non-detail) output is bounded by construction, whatever the report
+# holds: at most this many failing checks per summary (most severe first,
+# then a count of the rest), list params rendered as their first items plus
+# "and N more", and clipped messages and warnings. detail=true returns the
+# full data. tests/integration/test_mcp_ats_tools.py asserts a worst case
+# stays under 2 KB for every tool.
+SUMMARY_MAX_FAILING_CHECKS = 3
+COMPACT_MAX_FAILING_CHECKS = 2
+CHECK_ID_MAX_CHARS = 32
+MESSAGE_LIST_ITEMS = 5
+PARAM_ITEM_MAX_CHARS = 40
+MESSAGE_MAX_CHARS = 200
+REASON_MAX_IDS = 3
+SUMMARY_MAX_WARNINGS = 2
+WARNING_MAX_CHARS = 160
+SEVERITY_RANK = {"fatal": 0, "high": 1, "medium": 2, "low": 3}
+
 ContentLanguageArg = Annotated[
     ContentLanguage | None,
     Field(description="Language the resume is written in; detected (file) or the configured content language (stored resume) when omitted."),
@@ -51,24 +68,66 @@ DetailArg = Annotated[
 ]
 
 
-def failing_checks(report: ParseCheckReport) -> list[dict[str, Any]]:
-    """Failed checks with their severity and an English explanation."""
+def _cap_list(values: list[Any], limit: int) -> list[Any]:
+    """First ``limit`` items, then an ``and N more`` marker."""
+    if len(values) <= limit:
+        return values
+    return [*values[:limit], f"and {len(values) - limit} more"]
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _bounded_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Params with list values capped and strings clipped for summaries."""
+    bounded: dict[str, Any] = {}
+    for key, value in params.items():
+        if isinstance(value, list):
+            value = [
+                _clip(item, PARAM_ITEM_MAX_CHARS) if isinstance(item, str) else item
+                for item in _cap_list(value, MESSAGE_LIST_ITEMS)
+            ]
+        elif isinstance(value, str):
+            value = _clip(value, PARAM_ITEM_MAX_CHARS)
+        bounded[key] = value
+    return bounded
+
+
+def _failed_by_severity(report: ParseCheckReport) -> list[CheckResult]:
+    """Failed checks, most severe first (engine order within a severity)."""
+    failed = [check for check in report.checks if check.status == "fail"]
+    return sorted(failed, key=lambda check: SEVERITY_RANK[check.severity])
+
+
+def failing_checks(
+    report: ParseCheckReport, limit: int = SUMMARY_MAX_FAILING_CHECKS
+) -> tuple[list[dict[str, Any]], int]:
+    """The ``limit`` most severe failed checks, explained in English.
+
+    Returns the items and how many further failed checks were left out.
+    Messages are rendered from bounded params (lists capped, strings
+    clipped) and clipped themselves, so each item has a bounded size.
+    """
+    failed = _failed_by_severity(report)
     items: list[dict[str, Any]] = []
-    for check in report.checks:
-        if check.status != "fail":
-            continue
-        item: dict[str, Any] = {"id": check.id, "severity": check.severity}
+    for check in failed[:limit]:
+        item: dict[str, Any] = {"id": _clip(check.id, CHECK_ID_MAX_CHARS), "severity": check.severity}
+        bounded = check.model_copy(update={"params": _bounded_params(check.params)})
         try:
-            item["message"] = render_message(check)
+            message = render_message(bounded)
         except (KeyError, IndexError, ValueError):
             # A check id or parameter the English catalog does not know yet:
-            # report the raw id and parameters rather than failing the tool.
+            # show the raw parameters instead of failing the tool.
             logger.warning("No English message for parse check %r", check.id)
-            item["params"] = check.params
+            message = "No English message for this check; params: " + json.dumps(
+                bounded.params, sort_keys=True, default=str
+            )
+        item["message"] = _clip(message, MESSAGE_MAX_CHARS)
         if check.params.get("expected_by_template") is True:
             item["expected_by_template"] = True
         items.append(item)
-    return items
+    return items, max(len(failed) - limit, 0)
 
 
 def verdict(report: ParseCheckReport, min_content_recall: float) -> tuple[bool, list[str]]:
@@ -84,42 +143,72 @@ def verdict(report: ParseCheckReport, min_content_recall: float) -> tuple[bool, 
             f"content_recall {roundtrip.content_recall:g} is below {min_content_recall:g}"
         )
     blocking = [
-        check.id
-        for check in report.checks
-        if check.status == "fail" and check.severity in BLOCKING_SEVERITIES
+        _clip(check.id, CHECK_ID_MAX_CHARS)
+        for check in _failed_by_severity(report)
+        if check.severity in BLOCKING_SEVERITIES
     ]
     if blocking:
-        reasons.append("fatal/high checks failed: " + ", ".join(blocking))
+        reasons.append(
+            "fatal/high checks failed: " + ", ".join(_cap_list(blocking, REASON_MAX_IDS))
+        )
     return not reasons, reasons
 
 
-def report_summary(report: ParseCheckReport, min_content_recall: float) -> dict[str, Any]:
-    """Compact verdict of one report: scores, recall and failing checks."""
-    passes, reasons = verdict(report, min_content_recall)
-    summary: dict[str, Any] = {
+def _scores(report: ParseCheckReport, min_content_recall: float) -> dict[str, Any]:
+    passes, _ = verdict(report, min_content_recall)
+    scores: dict[str, Any] = {
         "passes": passes,
         "parseability_score": report.overall_score,
         "content_score": report.content_score,
     }
     if report.roundtrip is not None:
-        summary["content_recall"] = report.roundtrip.content_recall
-        summary["order_fidelity"] = report.roundtrip.order_fidelity
-    summary["failing_checks"] = failing_checks(report)
+        scores["content_recall"] = report.roundtrip.content_recall
+        scores["order_fidelity"] = report.roundtrip.order_fidelity
+    return scores
+
+
+def report_summary(report: ParseCheckReport, min_content_recall: float) -> dict[str, Any]:
+    """Bounded verdict of one report: scores, recall and top failing checks."""
+    summary = _scores(report, min_content_recall)
+    items, more = failing_checks(report)
+    summary["failing_checks"] = items
+    if more:
+        summary["more_failing_checks"] = more
+    _, reasons = verdict(report, min_content_recall)
     if reasons:
         summary["reasons"] = reasons
     return summary
 
 
-def own_output_summary(check: OwnOutputParseCheck) -> dict[str, Any]:
-    """Per-template summaries plus the English message of each failing check.
+def compact_report_summary(report: ParseCheckReport) -> dict[str, Any]:
+    """One row of the all-templates comparison: scores and top failing ids.
 
-    A check whose message is the same for every template that fails it (for
-    example ``multi_column`` on each two-column template) is explained once in
-    ``messages`` and referenced by id; an entry keeps its own ``message`` only
-    when the wording differs between templates. To keep seven templates
-    compact, ``status`` appears only for a template that could not be checked
-    (with ``error`` instead of a verdict) and an empty ``failing_checks`` is
-    omitted.
+    ``content_score`` is left out: content checks read the same text on every
+    template, so it does not help compare them (a single-template check or
+    detail=true has it).
+    """
+    summary = _scores(report, DEFAULT_MIN_CONTENT_RECALL)
+    del summary["content_score"]
+    failed = _failed_by_severity(report)
+    if failed:
+        summary["top_failing_checks"] = [
+            f"{_clip(check.id, CHECK_ID_MAX_CHARS)} ({check.severity})"
+            for check in failed[:COMPACT_MAX_FAILING_CHECKS]
+        ]
+    if len(failed) > COMPACT_MAX_FAILING_CHECKS:
+        summary["more_failing_checks"] = len(failed) - COMPACT_MAX_FAILING_CHECKS
+    return summary
+
+
+def own_output_summary(check: OwnOutputParseCheck, *, compact: bool) -> list[dict[str, Any]]:
+    """Per-template summaries of an own-output check.
+
+    A single template gets the full summary (``report_summary``). With
+    ``compact`` (all templates) each template is one comparison row: verdict,
+    parseability, recall and ``top_failing_checks`` ("id (severity)" strings of
+    its most severe failures), without messages or content_score; check a
+    template on its own, or pass detail=true, for explanations. Templates that
+    could not be checked carry ``status`` and ``error`` instead of a verdict.
     """
     results: list[dict[str, Any]] = []
     for result in check.results:
@@ -129,25 +218,17 @@ def own_output_summary(check: OwnOutputParseCheck) -> dict[str, Any]:
         if result.report is None:
             entry["status"] = result.status
             entry["error"] = result.error
+        elif compact:
+            entry.update(compact_report_summary(result.report))
         else:
             entry.update(report_summary(result.report, DEFAULT_MIN_CONTENT_RECALL))
-            if not entry["failing_checks"]:
-                del entry["failing_checks"]
         results.append(entry)
+    return results
 
-    wordings: dict[str, set[str]] = {}
-    for entry in results:
-        for item in entry.get("failing_checks", []):
-            if "message" in item:
-                wordings.setdefault(item["id"], set()).add(item["message"])
-    messages = {
-        check_id: next(iter(texts)) for check_id, texts in sorted(wordings.items()) if len(texts) == 1
-    }
-    for entry in results:
-        for item in entry.get("failing_checks", []):
-            if item["id"] in messages:
-                item.pop("message", None)
-    return {"messages": messages, "results": results}
+
+def bounded_warnings(warnings: list[str]) -> list[str]:
+    """First ``SUMMARY_MAX_WARNINGS`` warnings, clipped, then ``and N more``."""
+    return _cap_list([_clip(str(text), WARNING_MAX_CHARS) for text in warnings], SUMMARY_MAX_WARNINGS)
 
 
 def _retry_after_seconds(error: BridgeError) -> float:
@@ -216,7 +297,7 @@ def present_verification(
     result["min_content_recall"] = min_content_recall
     result.update(report_summary(report, min_content_recall))
     if stored.get("warnings"):
-        result["warnings"] = stored["warnings"]
+        result["warnings"] = stored["warnings"] if detail else bounded_warnings(stored["warnings"])
     if detail:
         result["keyword_score_detail"] = stored.get("keyword_score_detail")
         result["report"] = stored["report"]
@@ -380,7 +461,7 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
             result: dict[str, Any] = {
                 "resume_id": check.resume_id,
                 "render_locale": check.render_locale,
-                **own_output_summary(check),
+                "results": own_output_summary(check, compact=all_templates),
             }
             if detail:
                 result["report"] = check.model_dump(mode="json")
