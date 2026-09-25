@@ -395,3 +395,18 @@ def test_custom_section_prints_only_the_content_of_its_meta_type() -> None:
     # A "text" section with only strings has no content to print, not even its heading.
     assert statuses["heading.custom_1"] == "not_rendered"
     assert statuses["customSections.custom_1.strings[1]"] == "not_rendered"
+
+
+def test_custom_section_without_meta_entry_is_not_rendered() -> None:
+    """An LLM-parsed upload stores customSections but only the default
+    sectionMeta; the templates never print such a section."""
+    source = _custom_source()
+    source["sectionMeta"] = [entry for entry in source["sectionMeta"] if entry["key"] != "custom_2"]
+    text = "Ada Example\nSummary\nBackend engineer building data platforms."
+    statuses = _statuses(compute_roundtrip(source, text))
+    assert statuses["customSections.custom_2.text"] == "not_rendered"
+    assert "heading.custom_2" not in statuses
+    without_meta = _custom_source()
+    del without_meta["sectionMeta"]
+    statuses = _statuses(compute_roundtrip(without_meta, text))
+    assert {status for path, status in statuses.items() if "custom_" in path} == {"not_rendered"}
