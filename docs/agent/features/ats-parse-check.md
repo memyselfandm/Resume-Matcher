@@ -259,6 +259,12 @@ names the way the print page does.
   the template's render order.
 - Fields in hidden sections are `hidden`; fields a template does not print are
   `not_rendered`. Neither counts against recall.
+- Custom sections follow the templates' rules: one is printed only when its
+  `sectionMeta` entry has a falsy `isDefault`, and then only the content of
+  its meta `sectionType` (items, strings, or text), with its heading only when
+  that content is non-empty. Anything else is `not_rendered`. Note that the
+  backend `SectionMeta` model defaults `isDefault` to `true`, so a custom
+  section saved without the flag is silently left out of the PDF.
 - At most 1,000 expected fields are compared (`roundtrip.truncated` is then
   `true`), and the check's deadline is enforced per field, so a huge payload
   cannot run past the budget.
