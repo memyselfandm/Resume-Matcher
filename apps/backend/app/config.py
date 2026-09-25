@@ -423,6 +423,19 @@ class Settings(BaseSettings):
     # Paths
     data_dir: Path = Path(__file__).parent.parent / "data"
 
+    # Optional PostgreSQL backend (``postgresql+psycopg://user:pass@host/db``,
+    # requires the ``postgres`` extra). Unset keeps the default SQLite file at
+    # ``sqlite_path``. ``config.json`` and ``.secret_key`` stay in ``data_dir``.
+    database_url: str | None = None
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, v: Any) -> Any:
+        """Treat a blank DATABASE_URL (common in compose files) as unset."""
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     @property
     def db_path(self) -> Path:
         """Path to the legacy TinyDB database file (migration source only)."""

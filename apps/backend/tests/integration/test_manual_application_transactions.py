@@ -35,6 +35,7 @@ def client() -> Iterator[AsyncClient]:
     )
 
 
+@pytest.mark.sqlite_only  # raw sqlite3 observer; see test_postgres_backend.py
 async def test_manual_card_never_exposes_a_committed_job_without_its_card(
     fast_busy_database: Database,
     client: AsyncClient,
@@ -76,6 +77,7 @@ async def test_manual_card_never_exposes_a_committed_job_without_its_card(
     assert card["notes"] == MANUAL_CARD["notes"]
 
 
+@pytest.mark.sqlite_only  # raw sqlite3 observer; see test_postgres_backend.py
 async def test_failed_manual_card_insert_rolls_back_job_even_when_cleanup_would_be_busy(
     fast_busy_database: Database,
     client: AsyncClient,

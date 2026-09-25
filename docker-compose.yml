@@ -33,10 +33,34 @@ services:
       #- CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
     restart: unless-stopped
 
+  # ------------------------------------------------------------------
+  # Optional PostgreSQL database (profile "postgres"); inactive unless the
+  # profile is enabled, so `docker compose up` is unchanged. The app variant
+  # that uses it lives in docker-compose.postgres.yml:
+  #   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+  # ------------------------------------------------------------------
+  postgres:
+    image: postgres:17
+    profiles: ["postgres"]
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-resume_matcher}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-resume_matcher}
+      - POSTGRES_DB=${POSTGRES_DB:-resume_matcher}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
 #secrets:
 #  llm_api_key:
 #    file: ./secrets/llm_api_key
 
 volumes:
   resume-data:
+    driver: local
+  postgres-data:
     driver: local

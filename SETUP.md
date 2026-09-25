@@ -349,6 +349,22 @@ LOG_LEVEL=INFO LOG_LLM=DEBUG docker compose up -d
 > allow a message for it to appear. If you set `LITELLM_LOG` from LiteLLM docs,
 > make sure `LOG_LLM` is set to an equal or lower level.
 
+### Optional PostgreSQL (Compose override)
+
+The default `docker compose up` is unchanged. `docker-compose.yml` defines a PostgreSQL 17 service that stays off unless enabled. The opt-in override `docker-compose.postgres.yml` turns it on and runs the same `resume-matcher` service against it. It keeps the same port and the same `resume-data` volume, so `config.json` and the `.secret_key` that decrypts your stored API keys carry over. The override builds a local `resume-matcher-postgres:local` image: `ghcr.io/srbhr/resume-matcher:latest` plus the pinned PostgreSQL driver. Your pulled image is never retagged. Requires Docker Compose 2.24 or later.
+
+```bash
+# 1. Stop the SQLite app, then copy its data once (refuses a non-empty target without --force)
+docker compose stop resume-matcher
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+  run --rm -w /app/backend resume-matcher \
+  python -m app.scripts.migrate_sqlite_to_postgres
+# 2. Start on PostgreSQL
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+```
+
+The copy verifies row counts and per-row content hashes before committing. It also checks that the copied API keys decrypt with the volume's `.secret_key`, and aborts otherwise. To go back to SQLite, run plain `docker compose up -d`. The SQLite file is left untouched, but it will not contain writes made while running on PostgreSQL. Set `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` to override the defaults (change the password for anything beyond local use).
+
 ### Important Notes
 
 - **API keys are best configured through the UI** at `http://localhost:3000/settings`
@@ -432,7 +448,7 @@ npm run dev -- -p 3001
 
 ### Database Management
 
-Resume Matcher uses TinyDB (JSON file storage). All data is in `apps/backend/data/`:
+Resume Matcher uses SQLite by default (`apps/backend/data/resume_matcher.db`). All local data is in `apps/backend/data/`:
 
 ```bash
 # View database files
@@ -444,6 +460,22 @@ cp -r apps/backend/data apps/backend/data-backup
 # Reset everything (start fresh)
 rm -rf apps/backend/data
 ```
+
+#### Optional: PostgreSQL
+
+SQLite remains the default. A PostgreSQL database helps with durability, backups, and remote or shared hosting. It does not add write throughput, because writes are still serialized.
+
+```bash
+cd apps/backend
+uv sync --extra postgres
+# In .env (postgres:// and postgresql:// URLs are also accepted)
+DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/resume_matcher
+# Optional: with the app stopped, copy existing SQLite data
+# (refuses a non-empty target without --force)
+uv run python -m app.scripts.migrate_sqlite_to_postgres
+```
+
+`config.json` and `.secret_key` stay in `apps/backend/data/` (or `DATA_DIR`). Run the copy and the app with the same `DATA_DIR`, because its `.secret_key` decrypts the API keys stored in the database. The copy aborts if none of the copied keys decrypt with it; pass `--allow-undecryptable-keys` only if the original secret is lost. The copy first applies the app's usual additive schema update to the SQLite file, the same one the app runs at startup. On Windows, run the PostgreSQL backend via Docker or WSL: psycopg's async mode does not support Windows' default event loop.
 
 ---
 

@@ -60,11 +60,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     # Import a legacy TinyDB database into SQLite if present (idempotent).
     # Fail-fast on error: starting with an empty DB would look like data loss.
-    from app.scripts.migrate_tinydb_to_sqlite import migrate as migrate_tinydb
+    # PostgreSQL deployments are new and never held TinyDB-era data.
+    if db.dialect == "sqlite":
+        from app.scripts.migrate_tinydb_to_sqlite import migrate as migrate_tinydb
 
-    result = await migrate_tinydb()
-    if result.get("status") == "migrated":
-        logger.info("Startup data migration: %s", result)
+        result = await migrate_tinydb()
+        if result.get("status") == "migrated":
+            logger.info("Startup data migration: %s", result)
+    elif settings.db_path.exists():
+        logger.warning(
+            "Legacy TinyDB file %s is not imported on PostgreSQL; start once "
+            "on SQLite to import it, then run "
+            "app.scripts.migrate_sqlite_to_postgres",
+            settings.db_path,
+        )
     # Fold any legacy plaintext API keys into the encrypted store (idempotent,
     # non-clobbering), then strip them from config.json.
     from app.config import migrate_legacy_keys

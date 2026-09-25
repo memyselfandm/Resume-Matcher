@@ -35,6 +35,10 @@ dev = [
     "httpx>=0.28.0",
     "respx>=0.21.1",
 ]
+postgres = [
+    # Optional PostgreSQL backend (DATABASE_URL=postgresql+psycopg://...).
+    "psycopg[binary]==3.3.6",
+]
 e2e-monitor = [
     "pypdf>=4.0.0",  # PDF text probe for the non-blank render check
     "httpx>=0.28.0",
@@ -70,4 +74,6 @@ markers = [
     "eval: prompt-quality evaluations; may call a real LLM, skipped without a configured key",
     "e2e: end-to-end tests against running servers; skipped unless their environment variables are set",
     "pdf: real Chromium renders through a running frontend (opt-in, `-m pdf`)",
+    "sqlite_only: exercises SQLite driver behavior (PRAGMA, BEGIN IMMEDIATE, sqlite3 error codes); skipped when TEST_DATABASE_URL targets PostgreSQL",
+    "postgres_only: requires TEST_DATABASE_URL pointing at PostgreSQL; skipped otherwise",
 ]

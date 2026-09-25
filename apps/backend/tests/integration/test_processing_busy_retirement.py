@@ -16,6 +16,10 @@ from app.routers import resumes
 from tests.integration.test_storage_busy_writes import fast_busy_database  # noqa: F401
 from tests.integration.test_upload_processing import _docx_bytes
 
+# Holds the writer with raw ``BEGIN IMMEDIATE`` / ``PRAGMA busy_timeout``;
+# PostgreSQL equivalents live in tests/integration/test_postgres_backend.py.
+pytestmark = pytest.mark.sqlite_only
+
 
 async def test_unclaimed_upload_cannot_be_published_ready(
     fast_busy_database: Database,

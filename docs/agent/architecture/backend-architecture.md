@@ -72,6 +72,10 @@ apps/backend/app/
 ## Database (`database.py`, `models.py`, `db_engine.py`)
 
 **SQLite** via SQLAlchemy 2.0 async (`aiosqlite`). DB file: `data/resume_matcher.db`.
+Optional **PostgreSQL**: set `DATABASE_URL=postgresql+psycopg://...` and install the
+`postgres` extra (`uv sync --extra postgres`); both engines then use psycopg 3 under
+`READ COMMITTED` with `lock_timeout=5s`. `config.json` and `.secret_key` stay in `data/`.
+The legacy TinyDB import runs only on SQLite.
 `database.py` is an async `Database` facade (global `db` singleton) — same method
 names/signatures as before, but it returns **plain dicts**, never ORM rows.
 ORM models live in `models.py` (declarative `Base` + `Resume`/`Job`/`Improvement`/`Application`/`TailoringPreview`/`ApiKey`);
@@ -90,16 +94,20 @@ await db.get_stats() → {total_resumes, total_jobs, total_improvements, total_a
 get_api_key_ciphertexts() / replace_api_keys(...)  # sync; encrypted api_keys table
 ```
 
-**Two engines, one file (`db_engine.py`):** a module-level **async** engine serves
+**Two engines, one database (`db_engine.py`):** a module-level **async** engine serves
 the document tables + `applications`; a **sync** engine serves the encrypted
 `api_keys` table, which is read on the synchronous LLM hot path
 (`get_llm_config` → `load_config_file` → `resolve_api_key`) so async isn't threaded
-through `llm.py`. Both apply PRAGMAs `journal_mode=WAL`, `foreign_keys=ON`,
-`busy_timeout` on connect.
+through `llm.py`. On SQLite both apply PRAGMAs `journal_mode=WAL`, `foreign_keys=ON`,
+`busy_timeout` on connect. Additive column migrations use the SQLAlchemy inspector,
+so they run on either backend.
 
-**Single-master invariant** is enforced by a partial unique index on `is_master`.
-Master replacement and tracker read-modify-write operations reserve SQLite writes
-with `BEGIN IMMEDIATE`, including across Database instances.
+**Single-master invariant** is enforced by a partial unique index on `is_master`
+(`WHERE is_master = 1` on SQLite, `WHERE is_master` on PostgreSQL).
+Master replacement and tracker read-modify-write operations reserve the writer
+(`BEGIN IMMEDIATE` on SQLite, a per-schema `pg_advisory_xact_lock` on PostgreSQL),
+including across Database instances. ISO-8601 timestamp columns use the `C`
+collation on PostgreSQL so lexical comparison stays byte order.
 **Jobs' dynamic fields** (`job_keywords`, `job_keywords_hash`, `company`/`role`,
 `preview_hash`, `preview_hashes`, and `preview_prompt_id`) are stored in
 `metadata_json` and flattened on read; immutable preview identity, fingerprints,

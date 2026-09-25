@@ -1,7 +1,8 @@
-"""Tests for the real SQLAlchemy/SQLite layer (app.database.Database).
+"""Tests for the real SQLAlchemy layer (app.database.Database).
 
 Every integration test mocks `db`, so the actual persistence layer was barely
-exercised. These run a real SQLite database against a temp file, so CRUD,
+exercised. These run the real per-test database (temp-file SQLite, or a
+PostgreSQL schema when TEST_DATABASE_URL is set), so CRUD,
 master-resume assignment, the jobs ``metadata_json`` round-trip, applications,
 and stats are verified end-to-end on the storage.
 """
@@ -13,10 +14,9 @@ from app.db_engine import init_models_sync, make_sync_engine
 
 
 @pytest.fixture
-async def db(tmp_path):
-    database = Database(db_path=tmp_path / "test_db.db")
-    yield database
-    await database.close()
+def db(isolated_db: Database) -> Database:
+    """The per-test real database (SQLite, or PostgreSQL via TEST_DATABASE_URL)."""
+    return isolated_db
 
 
 class TestResumeCrud:
@@ -70,6 +70,7 @@ class TestResumeCrud:
         fetched = await db.get_resume(created["resume_id"])
         assert fetched["interview_prep"] == '{"role_fit_analysis":["fit"]}'
 
+    @pytest.mark.sqlite_only
     def test_interview_prep_migration_is_idempotent(self, tmp_path):
         engine = make_sync_engine(tmp_path / "old.db")
         try:

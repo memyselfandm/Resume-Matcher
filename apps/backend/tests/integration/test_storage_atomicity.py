@@ -59,7 +59,9 @@ async def test_concurrent_replacements_and_late_completion_preserve_master_ident
     old = await isolated_db.create_resume_atomic_master(
         content="old", processing_status="processing"
     )
-    other = Database(db_path=isolated_db.db_path)
+    other = Database(
+        db_path=isolated_db.db_path, database_url=isolated_db.database_url
+    )
     await other.list_resumes()
     start = asyncio.Event()
 
@@ -192,7 +194,9 @@ async def test_create_move_and_bulk_delete_share_column_ordering(
         await isolated_db.create_application(
             job_id=f"s{i}", resume_id=f"s{i}", status="saved"
         )
-    other = Database(db_path=isolated_db.db_path)
+    other = Database(
+        db_path=isolated_db.db_path, database_url=isolated_db.database_url
+    )
     await other.list_applications()  # Initialize both instances before contention.
     counted = asyncio.Event()
     release = asyncio.Event()
