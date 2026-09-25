@@ -392,6 +392,7 @@ def icon_font_pdf() -> bytes:
 
 
 WATERMARK_TEXT = "CONFIDENTIAL DRAFT"
+ITALIC_LINE = "Senior Software Engineer, Northwind Analytics, Jan 2021 - Present"
 
 
 def rotated_watermark_pdf() -> bytes:
@@ -399,7 +400,10 @@ def rotated_watermark_pdf() -> bytes:
     drawn inside a form XObject (as Chromium draws text with CSS opacity).
 
     The watermark crosses the body rows, so if its diagonal bounding box took
-    part in row reconstruction it would merge into a body row.
+    part in row reconstruction it would merge into a body row. The job title
+    row is set in synthetic italic (a sheared, not rotated, text matrix), as
+    Chromium on Linux draws fonts without an italic face; it must stay in
+    place.
     """
     lines: list[tuple[str, int, int, str]] = [
         ("F2", 72, 740, _pdf_literal(NAME)),
@@ -409,7 +413,10 @@ def rotated_watermark_pdf() -> bytes:
     for text in _BODY_LINES:
         y -= 28
         lines.append(("F2", 72, y, _pdf_literal(text)))
-    content = _text_ops(lines) + b"\nq /Wm Do Q"
+    title_y = 710 - 28 * (_BODY_LINES.index(ITALIC_LINE) + 1)
+    lines = [line for line in lines if line[2] != title_y]
+    italic = f"BT /F2 11 Tf 1 0 0.2126 1 72 {title_y} Tm {_pdf_literal(ITALIC_LINE)} Tj ET"
+    content = _text_ops(lines) + b"\n" + italic.encode("latin-1") + b"\nq /Wm Do Q"
     watermark = (
         f"q /G1 gs BT /F2 48 Tf 0.7071 0.7071 -0.7071 0.7071 150 400 Tm "
         f"{_pdf_literal(WATERMARK_TEXT)} Tj ET Q"

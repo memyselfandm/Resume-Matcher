@@ -256,55 +256,68 @@ they have at least two identity values.
 
 ### Results on real renders
 
-The committed fixtures in `tests/fixtures/ats_parse/renders/` were rendered
-through the real route (Next.js print page + Chromium, macOS system fonts,
-default settings) from a synthetic resume with a repeated employer, a bullet
-naming that employer, HTML bullets, a visible and a hidden custom section:
+The committed fixtures in `tests/fixtures/ats_parse/renders/` (`renders.tar.xz`
+plus `source.json` and `manifest.json`) were rendered through the real route
+in the production Docker image (Linux, Chromium 145.0.7632.6 headless shell,
+DejaVu fonts; the manifest records the image ID), with default settings, from
+a synthetic resume with a repeated employer, a bullet naming that employer,
+HTML bullets, a visible and a hidden custom section:
 
 | Template | multi_column | sidebar | expected_by_template | content_recall | order_fidelity | overall | content |
 |----------|--------------|---------|----------------------|----------------|----------------|---------|---------|
 | swiss-single | pass | pass | false | 1.000 | 0.993 | 100 | 100 |
-| swiss-two-column | fail | not_applicable | true | 0.947 | 0.737 | 90 | 90 |
+| swiss-two-column | fail | not_applicable | true | 0.912 | 0.752 | 90 | 90 |
 | modern | pass | pass | false | 1.000 | 0.993 | 100 | 100 |
-| modern-two-column | fail | not_applicable | true | 0.947 | 0.734 | 90 | 90 |
+| modern-two-column | fail | not_applicable | true | 0.912 | 0.759 | 90 | 90 |
 | latex | pass | pass | false | 1.000 | 0.991 | 100 | 100 |
-| clean | pass | pass | false | 0.810 | 1.000 | 90 | 90 |
-| vivid | fail | pass | true | 0.825 | 0.716 | 80 | 90 |
+| clean | pass | pass | false | 0.914 | 0.997 | 100 | 90 |
+| vivid | fail | pass | true | 0.807 | 0.627 | 90 | 90 |
 
-Column detector re-validation: no single-column render yields any gutter
-candidate at band widths from 6 to 18 pt; the two-column renders have a
-gutter spanning 0.89-0.92 of the text height (threshold 0.40) at every width,
-so the frozen 9 pt / 40% thresholds hold with a wide margin. The sidebar is
-reported under `multi_column` (swiss/modern two-column: 0.33 of page width,
-suppressed) or not narrow enough to count separately (vivid: 0.35).
+Column detector re-validation (on these renders and on earlier macOS
+renders): no single-column render yields any gutter candidate at band widths
+from 6 to 18 pt; the two-column renders have a gutter spanning 0.90-0.92 of
+the text height (threshold 0.40) at every width, so the frozen 9 pt / 40%
+thresholds hold with a wide margin. The sidebar is reported under `multi_column` (swiss/modern
+two-column: 0.33 of page width, suppressed) or not narrow enough to count
+separately (vivid: 0.35).
 
 Findings on these renders (reported, not suppressed):
 
-- `showContactIcons=true` does not trip `icon_font_glyphs`: the contact icons
-  are inline SVG drawings, which extract no text.
-- clean and vivid set job titles and project roles in `font-variant:
-  small-caps`. With the macOS system font (`ui-sans-serif`), Chromium emits
-  the small-cap "e" as U+F765 (Private Use Area), so "Senior Software
-  Engineer" extracts as "Snior Softwar Enginr": `icon_font_glyphs` fails and
-  those fields are `missing`. Linux renders use other fonts and may differ.
 - clean's letter-spaced section headings (`letter-spacing: 0.12em`) extract
-  as spaced letters (`S U M M A R Y`), so its headings are `missing` and
-  `section_headings` fails.
+  as spaced letters (`SU M M A R Y`), so its headings are `missing` and
+  `section_headings` fails. poppler's `pdftotext` reads them as words; pypdf
+  splits them too.
+- Uppercase headings and vivid's tightly kerned header pick up word breaks at
+  kerning gaps with the DejaVu fonts: `EDUCAT ION`, `PostgreSQ L` (swiss and
+  modern two-column sidebars), and in vivid `jo rdan.rivera@example.co m`, so
+  vivid's email is `missing` from the round trip (the `contact_email` check
+  still passes on the partial address). poppler reads these as words; pypdf
+  splits some of them.
 - In the two-column templates the extractor reads rows across both columns,
   so sidebar text interleaves with wrapped main-column lines (the summary and
-  some sidebar entries are `garbled`, order fidelity about 0.73), and sidebar
+  some sidebar entries are `garbled`, order fidelity 0.63-0.76), and sidebar
   headings share rows with main-column text.
+- The contact icons (`showContactIcons`) are lucide-react components, i.e.
+  inline SVG, which extracts no text; a unit test keeps every template on
+  them, so they cannot trip `icon_font_glyphs`.
 
-Regenerate the fixtures when a template changes (needs Chromium, the
-frontend at `FRONTEND_BASE_URL`, and a free port 8000; see the script's
-docstring):
+macOS renders (system fonts) differ: clean and vivid set job titles in
+`font-variant: small-caps`, and with the macOS system font Chromium emits the
+small-cap "e" as U+F765 (Private Use Area), so `icon_font_glyphs` fails and
+those titles are `missing` (clean recall 0.81, vivid 0.83); the DejaVu fonts
+have no small caps, so Chromium synthesizes them from capitals and the Linux
+image is unaffected. The kerning word breaks above do not occur on macOS.
+Tests that depend on the renderer's fonts key on the manifest's `platform`.
 
-```bash
-cd apps/backend
-uv run python ../../scripts/generate_ats_render_fixtures.py
-```
+Synthetic italic: the image ships no italic faces (DejaVu Sans, Serif and
+Mono in Book and Bold, Noto CJK), so Chromium slants italic text with a
+sheared text matrix (latex's job titles, `<em>` in bullets). Shear is not
+rotation, so that text stays in its rows.
 
-The same flow runs end to end as an opt-in test: `uv run pytest -m pdf`.
+Regenerate the fixtures when a template changes, in the production image; see
+the docstring of `scripts/generate_ats_render_fixtures.py` (`--base-url`).
+The same flow runs end to end against a local frontend and Chromium as an
+opt-in test: `uv run pytest -m pdf`.
 
 ## Scope and caveats
 
@@ -325,8 +338,8 @@ pinned `LAParams`, row reconstruction, python-docx structure), `layout_checks.py
 `content_checks.py` (language detection and gating), `roundtrip.py`
 (self-consistency against a source payload), `templates.py` (rendered-field
 maps, render order, localized default headings), `own_output.py` (render
-through the internal client, retries, budgets, fairness), `profiles.py`, `report.py`,
-`messages_en.py`, `engine.py`.
+through the internal client, retries, budgets, fairness), `profiles.py`,
+`report.py`, `messages_en.py`, `engine.py`.
 
 Fixtures in `apps/backend/tests/fixtures/ats_parse/` are synthetic and
 committed. Regenerate them only when a fixture must change:

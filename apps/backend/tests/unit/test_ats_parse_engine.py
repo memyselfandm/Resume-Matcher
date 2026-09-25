@@ -154,7 +154,8 @@ class TestRotatedText:
         # Extractors read it (all_texts), as its own row after the page's rows.
         assert rows[-1] == "CONFIDENTIAL DRAFT"
         assert sum("CONFIDENTIAL" in row for row in rows) == 1
-        assert "Senior Software Engineer, Northwind Analytics, Jan 2021 - Present" in rows
+        # The synthetic-italic (sheared, not rotated) title keeps its row.
+        assert rows[5] == "Senior Software Engineer, Northwind Analytics, Jan 2021 - Present"
         assert all("CONFIDENTIAL" not in line.text for line in document.pages[0].lines)
 
     def test_watermark_does_not_trip_layout_or_contact_checks(self) -> None:

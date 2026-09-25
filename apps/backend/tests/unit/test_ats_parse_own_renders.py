@@ -2,8 +2,10 @@
 
 ``tests/fixtures/ats_parse/renders/`` holds PDFs produced by the real download
 route for all seven templates, plus the ``processed_resume`` payload they
-rendered (``scripts/generate_ats_render_fixtures.py``). These tests pin the
-column detector and the round-trip on what users actually download.
+rendered (see ``tests/ats_parse_renders.py``). These tests pin the column
+detector and the round trip on what users actually download. The renders come
+from the production Docker image (Linux); the few assertions that depend on
+the renderer's fonts key on the manifest's ``platform``.
 """
 
 import json
@@ -25,8 +27,8 @@ from app.services.ats_parse.templates import (
     RenderLocale,
     localize_section_meta,
 )
+from tests.ats_parse_renders import manifest, render_pdf, render_stems, source
 
-RENDERS = Path(__file__).resolve().parents[1] / "fixtures" / "ats_parse" / "renders"
 FRONTEND = Path(__file__).resolve().parents[4] / "apps" / "frontend"
 SINGLE_COLUMN = ("swiss-single", "modern", "latex", "clean")
 TWO_COLUMN = ("swiss-two-column", "modern-two-column", "vivid")
@@ -35,19 +37,14 @@ CONTACT_FIELDS = ("name", "email", "phone", "location", "website", "linkedin", "
 
 @cache
 def _source() -> dict[str, Any]:
-    return json.loads((RENDERS / "source.json").read_text())
-
-
-@cache
-def _manifest() -> dict[str, Any]:
-    return json.loads((RENDERS / "manifest.json").read_text())
+    return source()
 
 
 @cache
 def _report(stem: str) -> ParseCheckReport:
-    settings = _manifest()["files"][stem]
+    settings = manifest()["files"][stem]
     return check_document_sync(
-        (RENDERS / f"{stem}.pdf").read_bytes(),
+        render_pdf(stem),
         "render.pdf",
         content_language="en",
         render_locale=settings["lang"] or "en",
@@ -58,7 +55,7 @@ def _report(stem: str) -> ParseCheckReport:
 
 @cache
 def _text(stem: str) -> str:
-    return extract_document((RENDERS / f"{stem}.pdf").read_bytes(), "render.pdf").text
+    return extract_document(render_pdf(stem), "render.pdf").text
 
 
 def _checks(stem: str) -> dict[str, Any]:
@@ -72,10 +69,9 @@ def _fields(stem: str) -> dict[str, str]:
 
 
 def test_every_template_has_a_committed_render() -> None:
-    files = _manifest()["files"]
+    files = manifest()["files"]
     assert {files[stem]["template"] for stem in files} == set(TEMPLATE_IDS)
-    for stem in files:
-        assert (RENDERS / f"{stem}.pdf").is_file()
+    assert render_stems() == set(files)
 
 
 @pytest.mark.parametrize("template", SINGLE_COLUMN)
@@ -116,7 +112,10 @@ def test_repeated_employer_entries_anchor_to_their_own_text(template: str) -> No
     for index in (0, 1):
         assert fields[f"workExperience[{index}].company"] == "found"
         assert fields[f"workExperience[{index}].years"] == "found"
-    assert fields["workExperience[0].description[2]"] == "found"
+    # The bullet is scored inside its own entry; in a two-column layout the
+    # sidebar may interleave with its wrapped line (garbled, not missing).
+    allowed = {"found", "garbled"} if TEMPLATE_LAYOUTS[template].two_column else {"found"}
+    assert fields["workExperience[0].description[2]"] in allowed
 
 
 def test_uppercase_rendered_headings_are_found() -> None:
@@ -138,9 +137,16 @@ def test_hidden_section_is_hidden_not_missing(template: str) -> None:
 def test_two_column_additional_heading_is_not_rendered(template: str) -> None:
     """Two-column templates print fixed per-list headings instead."""
     assert _fields(template)["heading.additional"] == "not_rendered"
-    assert "missing" not in {
-        status for path, status in _fields(template).items() if path.startswith("additional.")
+    missing = {
+        path
+        for path, status in _fields(template).items()
+        if path.startswith("additional.") and status == "missing"
     }
+    # With the Linux image's fonts the sidebar's "PostgreSQL" extracts as
+    # "PostgreSQ L" in the swiss two-column layouts (a kerning gap read as a
+    # word break); vivid separates its skills with bullets and is unaffected.
+    split_skill = manifest()["platform"] == "linux" and template != "vivid"
+    assert missing == ({"additional.technicalSkills[2]"} if split_skill else set())
 
 
 def test_spanish_render_locale_keeps_english_checks_and_spanish_headings() -> None:
@@ -178,19 +184,55 @@ def test_contact_icons_are_inline_svg_components() -> None:
         assert "className" not in block, path.name  # no icon-font class names
 
 
-def test_small_caps_private_use_glyphs_are_reported() -> None:
-    """The clean template's small-caps job titles, rendered with the macOS system
-    font (see ``manifest.json``), extract "e" as U+F765: a real parse defect."""
-    assert _manifest()["platform"] == "darwin"
-    icon_glyphs = _checks("clean")["icon_font_glyphs"]
-    assert icon_glyphs.status == "fail"
-    assert icon_glyphs.evidence["codepoints"] == ["U+F765"]
-    assert _fields("clean")["workExperience[0].title"] != "found"
+@pytest.mark.parametrize("template", ("clean", "vivid"))
+def test_small_caps_titles_depend_on_the_renderer_font(template: str) -> None:
+    """clean and vivid set job titles in ``font-variant: small-caps``.
+
+    With the macOS system font Chromium uses the font's small-cap glyphs and
+    emits "e" as U+F765 (Private Use Area), so titles are lost. The Linux
+    image's fonts (DejaVu) have no small caps; Chromium synthesizes them from
+    capitals, which extract as plain uppercase text.
+    """
+    icon_glyphs = _checks(template)["icon_font_glyphs"]
+    title = _fields(template)["workExperience[0].title"]
+    if manifest()["platform"] == "darwin":
+        assert icon_glyphs.status == "fail"
+        assert icon_glyphs.evidence["codepoints"] == ["U+F765"]
+        assert title == "missing"
+    else:
+        assert icon_glyphs.status == "pass"
+        assert "SENIOR SOFTWARE ENGINEER" in _text(template)
+        if template == "clean":
+            assert title == "found"
+
+
+def test_letter_spaced_headings_extract_as_spaced_letters() -> None:
+    """clean's section headings use ``letter-spacing: 0.12em``: the extractor
+    reads the gaps as word breaks, so the headings are not found."""
+    text = _text("clean")
+    assert "SUMMARY" not in text and "Summary" not in text
+    fields = _fields("clean")
+    for key in ("summary", "education", "personalProjects", "publications"):
+        assert fields[f"heading.{key}"] == "missing"
+    assert _checks("clean")["section_headings"].status == "fail"
+
+
+def test_vivid_header_kerning_gaps_split_words_on_linux() -> None:
+    """vivid's header and uppercase headings are tightly kerned in the Linux
+    image's fonts; the extractor reads some kerning gaps as word breaks, so the
+    header email does not survive the round trip (macOS renders keep it)."""
+    fields = _fields("vivid")
+    if manifest()["platform"] == "linux":
+        assert "jo rdan.rivera@example.co m" in _text("vivid")
+        assert fields["personalInfo.email"] == "missing"
+        assert fields["heading.education"] == "missing"
+    else:
+        assert fields["personalInfo.email"] == "found"
 
 
 def test_real_render_report_is_byte_identical_across_runs() -> None:
-    settings = _manifest()["files"]["vivid"]
-    content = (RENDERS / "vivid.pdf").read_bytes()
+    settings = manifest()["files"]["vivid"]
+    content = render_pdf("vivid")
     runs = [
         report_to_json(
             check_document_sync(

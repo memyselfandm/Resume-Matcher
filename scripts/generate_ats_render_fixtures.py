@@ -5,17 +5,28 @@ The PDFs are produced by the real download route, ``GET /api/v1/resumes/{id}/pdf
 default test suite checks the column detector and the round-trip against what
 users actually download, without needing Chromium or the frontend.
 
-Requirements (opt-in; re-run only when a template changes):
+Re-run only when a template changes. The committed fixtures come from the
+production Docker image, because rendered text depends on the renderer's
+fonts (the templates use system font stacks): build and run the image, then
+render through its REST API::
 
-* the Next.js frontend running at ``FRONTEND_BASE_URL`` (default
-  ``http://localhost:3000``), whose server-side data origin is the default
-  ``http://127.0.0.1:8000``;
-* Playwright's Chromium (``uv run playwright install chromium``);
-* port 8000 free: this script serves the backend in-process on
-  ``127.0.0.1:8000`` against a temporary ``DATA_DIR``, seeds one synthetic
-  resume, and renders it.
+    docker build -t rm-render-check:tmp .
+    docker run -d --name rm-render-check -p 127.0.0.1:53000:3000 \
+        --tmpfs /app/backend/data:uid=1000,gid=1000 rm-render-check:tmp
+    cd apps/backend
+    uv run python ../../scripts/generate_ats_render_fixtures.py \
+        --base-url http://127.0.0.1:53000 \
+        --chromium "$(docker exec rm-render-check sh -c \
+            '~/.cache/ms-playwright/chromium_headless_shell-*/*/chrome-headless-shell --version')" \
+        --image-id "$(docker image inspect -f '{{.Id}}' rm-render-check:tmp)"
 
-Run from ``apps/backend``::
+``--base-url`` seeds the persona through ``POST /api/v1/resumes/upload`` and
+``PATCH /api/v1/resumes/{id}``. Without it, the script renders on this machine
+instead (for template development): it needs the Next.js frontend at
+``FRONTEND_BASE_URL`` (default ``http://localhost:3000``) whose server-side
+data origin is ``http://127.0.0.1:8000``, Playwright's Chromium, and port 8000
+free, since it serves the backend there in-process against a temporary
+``DATA_DIR``::
 
     uv run python ../../scripts/generate_ats_render_fixtures.py
 
@@ -23,11 +34,9 @@ Writes ``apps/backend/tests/fixtures/ats_parse/renders/``: ``renders.tar.xz``
 with one PDF per template (default settings) plus ``swiss-single-es.pdf``
 (``lang=es``), stored byte for byte; ``source.json`` (the ``processed_resume``
 payload the print page rendered); and ``manifest.json`` (the settings of every
-PDF, the platform, and the Chromium version: templates use system font stacks,
-so glyph mapping can differ between macOS and Linux renders). Ideally
-regenerate in the production image so the fixtures match what users get. It then runs
-``POST /api/v1/resumes/{id}/parse-check`` with ``all_templates`` and prints each
-template's verdicts.
+PDF, and the platform, Chromium version, and image that rendered them). It
+then runs ``POST /api/v1/resumes/{id}/parse-check`` with ``all_templates`` on
+the same backend and prints each template's verdicts.
 
 The persona is fictional (reserved example domains, 555 phone number). It
 covers the round-trip edge cases: a repeated employer, a bullet naming the

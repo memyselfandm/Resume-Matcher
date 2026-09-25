@@ -10,7 +10,6 @@ database, for the print page to fetch the resume from.
 import asyncio
 import json
 import socket
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,10 +21,10 @@ from app.config import settings
 from app.main import app
 from app.pdf import close_pdf_renderer
 from app.services.ats_parse.templates import TEMPLATE_IDS, TEMPLATE_LAYOUTS
+from tests.ats_parse_renders import source as render_source
 
 pytestmark = pytest.mark.pdf
 
-RENDERS = Path(__file__).resolve().parents[1] / "fixtures" / "ats_parse" / "renders"
 # Captured at import, before the autouse network guard replaces them.
 _REAL_SOCKET = {
     "create_connection": socket.create_connection,
@@ -62,7 +61,7 @@ async def test_all_templates_render_and_parse_check(real_network: None, isolated
     except httpx.HTTPError as exc:
         pytest.fail(f"The pdf marker needs the frontend at {settings.frontend_base_url}: {exc}")
 
-    source = json.loads((RENDERS / "source.json").read_text())
+    source = render_source()
     resume = await isolated_db.create_resume(
         content=json.dumps(source),
         content_type="json",

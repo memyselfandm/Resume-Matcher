@@ -225,18 +225,23 @@ def _round(value: float) -> float:
     return round(value, 2)
 
 
-# Glyph matrices with a shear/rotation component above this are rotated text
+# A glyph whose baseline rises more than this per unit of advance is rotated
 # (pdfminer's ``upright`` only means "not mirrored").
 ROTATION_TOLERANCE = 0.01
 
 
 def _is_rotated(line: LTTextLine) -> bool:
-    """Whether a line has glyphs drawn rotated or skewed (e.g. a watermark)."""
+    """Whether a line has glyphs drawn with a rotated baseline (e.g. a watermark).
+
+    Only the baseline direction (``b`` against ``a`` of the glyph matrix)
+    counts. A horizontal shear (``c``) is synthetic italic: Chromium on Linux
+    slants fonts without an italic face that way, and that text stays in its
+    row.
+    """
     for char in line:
         if isinstance(char, LTChar):
-            a, b, c, d, _, _ = char.matrix
-            scale = max(abs(a), abs(d), 1e-9)
-            if abs(b) / scale > ROTATION_TOLERANCE or abs(c) / scale > ROTATION_TOLERANCE:
+            a, b, _, _, _, _ = char.matrix
+            if abs(b) > ROTATION_TOLERANCE * max(abs(a), 1e-9):
                 return True
     return False
 

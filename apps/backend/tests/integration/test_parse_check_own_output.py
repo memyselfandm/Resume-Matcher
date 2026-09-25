@@ -7,7 +7,6 @@ of whichever template the PDF route asked for.
 
 import json
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -27,8 +26,8 @@ from app.services.ats_parse import own_output
 from app.services.ats_parse.engine import PARSE_CHECK_TIMEOUT_SECONDS
 from app.services.ats_parse.roundtrip import MAX_ROUNDTRIP_FIELDS
 from app.services.ats_parse.templates import TEMPLATE_IDS
+from tests.ats_parse_renders import render_pdf, source as render_source
 
-RENDERS = Path(__file__).resolve().parents[1] / "fixtures" / "ats_parse" / "renders"
 TWO_COLUMN = {"swiss-two-column", "modern-two-column", "vivid"}
 PDF_QUERY_KEYS = {
     "template", "pageSize", "marginTop", "marginBottom", "marginLeft", "marginRight",
@@ -51,7 +50,7 @@ def fast_retries(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 async def resume_id(isolated_db: Any) -> str:
-    source = json.loads((RENDERS / "source.json").read_text())
+    source = render_source()
     resume = await isolated_db.create_resume(
         content=json.dumps(source),
         content_type="json",
@@ -78,7 +77,7 @@ def _fixture_render(
         if error is not None:
             raise error
         stem = "swiss-single-es" if query.get("lang") == "es" else query["template"]
-        return (RENDERS / f"{stem}.pdf").read_bytes()
+        return render_pdf(stem)
 
     return render
 
@@ -366,7 +365,7 @@ async def test_portuguese_render_locale_is_accepted(client: AsyncClient, resume_
 async def test_huge_resume_round_trip_is_capped_within_the_budget(
     client: AsyncClient, isolated_db: Any
 ) -> None:
-    source = json.loads((RENDERS / "source.json").read_text())
+    source = render_source()
     source["workExperience"][0]["description"] = [
         f"Delivered project {index} for client team {index * 7}" for index in range(3_000)
     ]
@@ -468,7 +467,7 @@ async def test_user_download_refused_during_a_sweep_gets_the_slot_on_retry(
         else:
             await anyio.sleep(0.05)
         timeline.append((who, template, start, anyio.current_time()))
-        return (RENDERS / f"{template}.pdf").read_bytes()
+        return render_pdf(template)
 
     monkeypatch.setattr(pdf, "_render_on_shared_browser", shared_browser_render)
     responses: dict[str, Any] = {}
