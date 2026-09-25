@@ -37,6 +37,7 @@ from docx import Document
 from pdfminer.converter import PDFPageAggregator
 from pdfminer.layout import (
     LAParams,
+    LTChar,
     LTComponent,
     LTContainer,
     LTImage,
@@ -74,6 +75,9 @@ _DEADLINE_CHECK_INTERVAL = 256
 
 # Layout analysis results depend on these values, so they are pinned rather
 # than inherited from pdfminer defaults that may change between releases.
+# ``all_texts`` also groups text drawn inside form XObjects (LTFigure) into
+# lines: Chromium draws semi-transparent text (CSS ``opacity``, e.g. the vivid
+# template's surname) inside one, and text extractors do read it.
 PINNED_LAPARAMS = LAParams(
     line_overlap=0.5,
     char_margin=2.0,
@@ -81,7 +85,7 @@ PINNED_LAPARAMS = LAParams(
     word_margin=0.1,
     boxes_flow=None,
     detect_vertical=False,
-    all_texts=False,
+    all_texts=True,
 )
 
 SUPPORTED_SUFFIXES: dict[str, FileFormat] = {
@@ -221,27 +225,56 @@ def _round(value: float) -> float:
     return round(value, 2)
 
 
+# A glyph whose baseline rises more than this per unit of advance is rotated
+# (pdfminer's ``upright`` only means "not mirrored").
+ROTATION_TOLERANCE = 0.01
+
+
+def _is_rotated(line: LTTextLine) -> bool:
+    """Whether a line has glyphs drawn with a rotated baseline (e.g. a watermark).
+
+    Only the baseline direction (``b`` against ``a`` of the glyph matrix)
+    counts. A horizontal shear (``c``) is synthetic italic: Chromium on Linux
+    slants fonts without an italic face that way, and that text stays in its
+    row.
+    """
+    for char in line:
+        if isinstance(char, LTChar):
+            a, b, _, _, _, _ = char.matrix
+            if abs(b) > ROTATION_TOLERANCE * max(abs(a), 1e-9):
+                return True
+    return False
+
+
 def _walk_layout(
     item: LTComponent,
     lines: list[TextLine],
     images: list[tuple[float, float]],
+    rotated: list[str],
 ) -> None:
-    """Collect text lines and raster images in pdfminer's reading order."""
+    """Collect text lines and raster images in pdfminer's reading order.
+
+    Rotated lines (diagonal watermarks, vertical side labels) keep their text
+    in ``rotated`` but never join ``lines``: their bounding box spans the
+    page diagonally, which would block every gutter band and scramble rows.
+    """
     if isinstance(item, LTTextLine):
         text = item.get_text().replace("\n", " ").strip()
-        if text:
-            lines.append(
-                TextLine(
-                    _round(item.x0), _round(item.y0), _round(item.x1), _round(item.y1), text
-                )
-            )
+        if not text:
+            return
+        if _is_rotated(item):
+            rotated.append(text)
+            return
+        lines.append(
+            TextLine(_round(item.x0), _round(item.y0), _round(item.x1), _round(item.y1), text)
+        )
         return
     if isinstance(item, LTImage):
         images.append((_round(item.width), _round(item.height)))
         return
     if isinstance(item, (LTTextBox, LTContainer)):
         for child in item:
-            _walk_layout(child, lines, images)
+            _walk_layout(child, lines, images, rotated)
 
 
 def reconstruct_rows(lines: list[TextLine]) -> list[str]:
@@ -314,11 +347,13 @@ def _extract_pdf(content: bytes, deadline: float | None) -> ExtractedDocument:
                 continue
             layout: LTPage = device.get_result()
             lines: list[TextLine] = []
+            rotated: list[str] = []
             images: list[tuple[float, float]] = []
             for item in layout:
-                _walk_layout(item, lines, images)
+                _walk_layout(item, lines, images, rotated)
             page_chars = 0
-            for row in reconstruct_rows(lines):
+            # Rotated text follows the page's rows, as its own rows.
+            for row in [*reconstruct_rows(lines), *rotated]:
                 remaining = MAX_EXTRACTED_CHARS - char_total
                 if remaining <= 0:
                     truncated_chars = True
