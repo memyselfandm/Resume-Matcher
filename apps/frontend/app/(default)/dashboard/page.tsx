@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback, useRef, type KeyboardEvent } from 're
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { ParseCheckUploadDialog } from '@/components/ats-parse-check/parse-check-upload-dialog';
 import { Card, CardTitle, CardDescription } from '@/components/ui/card';
 import Link from 'next/link';
 import { useTranslations } from '@/lib/i18n';
@@ -18,6 +19,7 @@ import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
 import Plus from 'lucide-react/dist/esm/icons/plus';
 import Settings from 'lucide-react/dist/esm/icons/settings';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
+import FileSearch from 'lucide-react/dist/esm/icons/file-search';
 
 import {
   fetchResume,
@@ -37,6 +39,7 @@ export default function DashboardPage() {
   const [masterResumeId, setMasterResumeId] = useState<string | null>(null);
   const [processingStatus, setProcessingStatus] = useState<ProcessingStatus>('loading');
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showParseCheck, setShowParseCheck] = useState(false);
   const [listError, setListError] = useState(false);
   const [deleteError, setDeleteError] = useState(false);
   const [tailoredResumes, setTailoredResumes] = useState<ResumeListItem[]>([]);
@@ -410,7 +413,8 @@ export default function DashboardPage() {
     return Math.abs(hash);
   };
 
-  const totalCards = 1 + tailoredResumes.length + 1;
+  // Master, tailored resumes, create-tailored, and the parse-check card.
+  const totalCards = 1 + tailoredResumes.length + 1 + 1;
   const fillerCount = Math.max(0, (5 - (totalCards % 5)) % 5);
   const extraFillerCount = 5;
   // Use Tailwind classes for fillers now that we have them in config or use specific hex if needed
@@ -666,7 +670,26 @@ export default function DashboardPage() {
           </div>
         </Card>
 
-        {/* 4. Fillers */}
+        {/* 4. Standalone ATS parse check of any file */}
+        <Card className="aspect-square h-full" variant="default">
+          <div className="flex-1 flex flex-col items-center justify-center text-center h-full">
+            <Button
+              onClick={() => setShowParseCheck(true)}
+              aria-label={t('atsParseCheck.upload.cardTitle')}
+              className="w-20 h-20 bg-white text-black border-2 border-black shadow-sw-default hover:bg-paper-tint hover:translate-y-[2px] hover:translate-x-[2px] hover:shadow-none transition-all rounded-none"
+            >
+              <FileSearch className="w-8 h-8" />
+            </Button>
+            <p className="text-xs font-mono mt-4 uppercase font-bold">
+              {t('atsParseCheck.upload.cardTitle')}
+            </p>
+            <p className="text-xs font-mono mt-1 uppercase text-ink-soft">
+              {t('atsParseCheck.upload.cardDescription')}
+            </p>
+          </div>
+        </Card>
+
+        {/* 5. Fillers */}
         {Array.from({ length: fillerCount }).map((_, index) => (
           <Card
             key={`filler-${index}`}
@@ -684,6 +707,8 @@ export default function DashboardPage() {
             className={`hidden md:block ${fillerPalette[index % fillerPalette.length]} aspect-square h-full opacity-70 pointer-events-none`}
           />
         ))}
+
+        <ParseCheckUploadDialog open={showParseCheck} onOpenChange={setShowParseCheck} />
 
         <ConfirmDialog
           open={showDeleteDialog}
