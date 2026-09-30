@@ -1,0 +1,112 @@
+{
+  "additional": {
+    "technicalSkills": [
+      "Python",
+      "Go",
+      "PostgreSQL",
+      "Kafka",
+      "Kubernetes",
+      "Terraform",
+      "FastAPI",
+      "React"
+    ]
+  },
+  "education": [
+    {
+      "degree": "B.S. Computer Science",
+      "id": 0,
+      "institution": "Bay State University",
+      "years": "Aug 2011 - May 2015"
+    },
+    {
+      "degree": "Certificate, Data Engineering",
+      "id": 1,
+      "institution": "Harbor Extension School",
+      "years": "Jan 2019 - Jun 2019"
+    },
+    {
+      "degree": "Cloud Practitioner Credential",
+      "id": 2,
+      "institution": "Example Cloud Institute",
+      "years": "Mar 2020 - Apr 2020"
+    }
+  ],
+  "personalInfo": {
+    "email": "jordan.rivera@example.com",
+    "linkedin": "linkedin.com/in/jordan-rivera-example",
+    "location": "Oakland, CA",
+    "name": "Jordan Rivera",
+    "phone": "(555) 010-4477"
+  },
+  "sectionMeta": [
+    {
+      "displayName": "Summary",
+      "id": "summary",
+      "isVisible": true,
+      "key": "summary",
+      "order": 1
+    },
+    {
+      "displayName": "Experience",
+      "id": "workExperience",
+      "isVisible": true,
+      "key": "workExperience",
+      "order": 2
+    },
+    {
+      "displayName": "Education",
+      "id": "education",
+      "isVisible": true,
+      "key": "education",
+      "order": 3
+    },
+    {
+      "displayName": "Skills",
+      "id": "additional",
+      "isVisible": true,
+      "key": "additional",
+      "order": 4
+    }
+  ],
+  "summary": "Backend engineer with 9 years of experience building reliable data platforms, developer tooling, and logistics systems. Focused on measurable reliability and delivery improvements.",
+  "workExperience": [
+    {
+      "company": "Northwind Analytics",
+      "description": [
+        "Led migration of 40 services to a shared deployment platform, reducing release time by 35%.",
+        "Designed an event pipeline processing 2,000,000 records per day with 99.9% availability.",
+        "Mentored 6 engineers.",
+        "Automated compliance reporting, saving $120,000 per year in manual review effort."
+      ],
+      "id": 0,
+      "location": "San Francisco, CA",
+      "title": "Senior Software Engineer",
+      "years": "Jan 2021 - Present"
+    },
+    {
+      "company": "Bluebird Logistics",
+      "description": [
+        "Built route optimization services used by 300 dispatchers across 12 regional hubs.",
+        "Improved query latency by 60% by redesigning the reporting schema.",
+        "Launched an internal API catalog.",
+        "Implemented contract tests that reduced production incidents by 25%."
+      ],
+      "id": 1,
+      "location": "Oakland, CA",
+      "title": "Software Engineer",
+      "years": "Jun 2017 - Dec 2020"
+    },
+    {
+      "company": "Harbor Point Media",
+      "description": [
+        "Developed content publishing tools for a newsroom of 80 editors.",
+        "Streamlined image processing jobs, cutting storage costs by 18%.",
+        "Delivered 15 client dashboards on schedule."
+      ],
+      "id": 2,
+      "location": "Vallejo, CA",
+      "title": "Junior Developer",
+      "years": "Aug 2015 - May 2017"
+    }
+  ]
+}

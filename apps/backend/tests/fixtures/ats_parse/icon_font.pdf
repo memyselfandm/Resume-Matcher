@@ -1,0 +1,67 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R /F2 7 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 1033 >>
+stream
+BT /F2 11 Tf 72 740 Td (Jordan Rivera) Tj ET
+BT /F1 11 Tf 72 720 Td <01> Tj ET
+BT /F2 11 Tf 90 720 Td (jordan.rivera@example.com) Tj ET
+BT /F1 11 Tf 72 704 Td <02> Tj ET
+BT /F2 11 Tf 90 704 Td (\(555\) 010-4477) Tj ET
+BT /F1 11 Tf 72 688 Td <03> Tj ET
+BT /F2 11 Tf 90 688 Td (linkedin.com/in/jordan-rivera-example) Tj ET
+BT /F2 11 Tf 72 656 Td (Summary) Tj ET
+BT /F2 11 Tf 72 640 Td (Backend engineer with 9 years of experience building data platforms.) Tj ET
+BT /F2 11 Tf 72 624 Td (Experience) Tj ET
+BT /F2 11 Tf 72 608 Td (Senior Software Engineer, Northwind Analytics, Jan 2021 - Present) Tj ET
+BT /F2 11 Tf 72 592 Td (Led migration of 40 services, reducing release time by 35%.) Tj ET
+BT /F2 11 Tf 72 576 Td (Designed an event pipeline processing 2,000,000 records per day.) Tj ET
+BT /F2 11 Tf 72 560 Td (Education) Tj ET
+BT /F2 11 Tf 72 544 Td (B.S. Computer Science, Bay State University, May 2015) Tj ET
+BT /F2 11 Tf 72 528 Td (Skills) Tj ET
+BT /F2 11 Tf 72 512 Td (Python, Go, PostgreSQL, Kafka, Kubernetes, Terraform) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /IconGlyphs /FirstChar 1 /LastChar 3 /Widths [700 700 700] /ToUnicode 6 0 R >>
+endobj
+6 0 obj
+<< /Length 255 >>
+stream
+/CIDInit /ProcSet findresource begin 12 dict begin begincmap
+/CMapName /IconMap def 1 begincodespacerange <00> <FF> endcodespacerange
+3 beginbfchar
+<01> <F0E0>
+<02> <F095>
+<03> <F08C>
+endbfchar
+endcmap CMapName currentdict /CMap defineresource pop end end
+endstream
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000257 00000 n 
+0000001342 00000 n 
+0000001477 00000 n 
+0000001783 00000 n 
+trailer
+<< /Size 8 /Root 1 0 R >>
+startxref
+1853
+%%EOF

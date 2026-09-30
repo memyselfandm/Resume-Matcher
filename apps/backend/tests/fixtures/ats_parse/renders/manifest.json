@@ -1,0 +1,207 @@
+{
+  "chromium": "145.0.7632.6",
+  "files": {
+    "clean": {
+      "accentColor": "blue",
+      "compactMode": false,
+      "fontSize": {
+        "base": 3,
+        "bodyFont": "sans-serif",
+        "headerFont": "serif",
+        "headerScale": 3
+      },
+      "lang": null,
+      "margins": {
+        "bottom": 10,
+        "left": 10,
+        "right": 10,
+        "top": 10
+      },
+      "pageSize": "A4",
+      "showContactIcons": false,
+      "spacing": {
+        "item": 2,
+        "lineHeight": 3,
+        "section": 3
+      },
+      "template": "clean"
+    },
+    "latex": {
+      "accentColor": "blue",
+      "compactMode": false,
+      "fontSize": {
+        "base": 3,
+        "bodyFont": "sans-serif",
+        "headerFont": "serif",
+        "headerScale": 3
+      },
+      "lang": null,
+      "margins": {
+        "bottom": 10,
+        "left": 10,
+        "right": 10,
+        "top": 10
+      },
+      "pageSize": "A4",
+      "showContactIcons": false,
+      "spacing": {
+        "item": 2,
+        "lineHeight": 3,
+        "section": 3
+      },
+      "template": "latex"
+    },
+    "modern": {
+      "accentColor": "blue",
+      "compactMode": false,
+      "fontSize": {
+        "base": 3,
+        "bodyFont": "sans-serif",
+        "headerFont": "serif",
+        "headerScale": 3
+      },
+      "lang": null,
+      "margins": {
+        "bottom": 10,
+        "left": 10,
+        "right": 10,
+        "top": 10
+      },
+      "pageSize": "A4",
+      "showContactIcons": false,
+      "spacing": {
+        "item": 2,
+        "lineHeight": 3,
+        "section": 3
+      },
+      "template": "modern"
+    },
+    "modern-two-column": {
+      "accentColor": "blue",
+      "compactMode": false,
+      "fontSize": {
+        "base": 3,
+        "bodyFont": "sans-serif",
+        "headerFont": "serif",
+        "headerScale": 3
+      },
+      "lang": null,
+      "margins": {
+        "bottom": 10,
+        "left": 10,
+        "right": 10,
+        "top": 10
+      },
+      "pageSize": "A4",
+      "showContactIcons": false,
+      "spacing": {
+        "item": 2,
+        "lineHeight": 3,
+        "section": 3
+      },
+      "template": "modern-two-column"
+    },
+    "swiss-single": {
+      "accentColor": "blue",
+      "compactMode": false,
+      "fontSize": {
+        "base": 3,
+        "bodyFont": "sans-serif",
+        "headerFont": "serif",
+        "headerScale": 3
+      },
+      "lang": null,
+      "margins": {
+        "bottom": 10,
+        "left": 10,
+        "right": 10,
+        "top": 10
+      },
+      "pageSize": "A4",
+      "showContactIcons": false,
+      "spacing": {
+        "item": 2,
+        "lineHeight": 3,
+        "section": 3
+      },
+      "template": "swiss-single"
+    },
+    "swiss-single-es": {
+      "accentColor": "blue",
+      "compactMode": false,
+      "fontSize": {
+        "base": 3,
+        "bodyFont": "sans-serif",
+        "headerFont": "serif",
+        "headerScale": 3
+      },
+      "lang": "es",
+      "margins": {
+        "bottom": 10,
+        "left": 10,
+        "right": 10,
+        "top": 10
+      },
+      "pageSize": "A4",
+      "showContactIcons": false,
+      "spacing": {
+        "item": 2,
+        "lineHeight": 3,
+        "section": 3
+      },
+      "template": "swiss-single"
+    },
+    "swiss-two-column": {
+      "accentColor": "blue",
+      "compactMode": false,
+      "fontSize": {
+        "base": 3,
+        "bodyFont": "sans-serif",
+        "headerFont": "serif",
+        "headerScale": 3
+      },
+      "lang": null,
+      "margins": {
+        "bottom": 10,
+        "left": 10,
+        "right": 10,
+        "top": 10
+      },
+      "pageSize": "A4",
+      "showContactIcons": false,
+      "spacing": {
+        "item": 2,
+        "lineHeight": 3,
+        "section": 3
+      },
+      "template": "swiss-two-column"
+    },
+    "vivid": {
+      "accentColor": "blue",
+      "compactMode": false,
+      "fontSize": {
+        "base": 3,
+        "bodyFont": "sans-serif",
+        "headerFont": "serif",
+        "headerScale": 3
+      },
+      "lang": null,
+      "margins": {
+        "bottom": 10,
+        "left": 10,
+        "right": 10,
+        "top": 10
+      },
+      "pageSize": "A4",
+      "showContactIcons": false,
+      "spacing": {
+        "item": 2,
+        "lineHeight": 3,
+        "section": 3
+      },
+      "template": "vivid"
+    }
+  },
+  "image_id": "sha256:79f2c38e26fbf9d760946f9b8efd451989fa2fe9ca50a10465121a38a83cab1a",
+  "platform": "linux"
+}
