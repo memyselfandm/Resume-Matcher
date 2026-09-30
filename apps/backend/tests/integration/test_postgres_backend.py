@@ -4,7 +4,7 @@ Opt-in: runs only with ``TEST_DATABASE_URL=postgresql+psycopg://...`` (see
 docs/agent/architecture/storage-transactions.md). Each test gets its own schema
 through ``isolated_db``. These are the PostgreSQL counterparts of the
 ``sqlite_only`` tests plus the invariants the plan requires on PostgreSQL:
-single master under concurrency, lock timeout → 503, distinct tracker
+a single default master under concurrency, lock timeout → 503, distinct tracker
 positions, byte-order timestamp ordering and a verified migration round trip.
 """
 
@@ -24,7 +24,12 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapper, Session
 
 from app import crypto
-from app.database import POSTGRES_WRITER_LOCK_ARGS, Database, DatabaseBusyError
+from app.database import (
+    MAX_MASTER_RESUMES,
+    POSTGRES_WRITER_LOCK_ARGS,
+    Database,
+    DatabaseBusyError,
+)
 from app.db_engine import init_models_sync, make_sync_engine
 from app.main import app
 from app.models import Application, Base, Job, Resume, TailoringPreview
@@ -124,14 +129,105 @@ def test_additive_migration_is_idempotent_on_postgres(isolated_db: Database) -> 
     assert "ix_preview_compatibility" in indexes
 
 
+def _create_pre_master_track_layout(engine: Engine) -> None:
+    """A PostgreSQL schema as this backend created it before master tracks."""
+    Base.metadata.drop_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE resumes (resume_id TEXT PRIMARY KEY, "
+            "content TEXT NOT NULL, content_type TEXT DEFAULT 'md', "
+            "is_master BOOLEAN DEFAULT FALSE, created_at VARCHAR COLLATE \"C\")"
+        )
+        connection.exec_driver_sql(
+            "CREATE UNIQUE INDEX ux_resumes_single_master ON resumes (is_master) "
+            "WHERE is_master"
+        )
+        connection.exec_driver_sql(
+            "CREATE TABLE tailoring_previews (preview_id TEXT PRIMARY KEY, "
+            "source_id TEXT, job_id TEXT, payload_hash TEXT, source_hash TEXT, "
+            "job_hash TEXT, created_at TEXT, expires_at TEXT, "
+            "result_resume_id TEXT, claim_token TEXT, claim_expires_at TEXT, "
+            "response_data JSON, improvements JSON)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO resumes (resume_id, content, is_master, created_at) VALUES "
+            "('old-master', 'm', TRUE, '2026-01-01T00:00:00'), "
+            "('child', 'c', FALSE, '2026-01-02T00:00:00')"
+        )
+
+
+def test_master_track_upgrade_on_postgres(isolated_db: Database) -> None:
+    """PostgreSQL counterpart of TestDefaultMasterMigration (SQLite)."""
+    statements: list[str] = []
+    with side_engine(isolated_db) as engine:
+        _create_pre_master_track_layout(engine)
+        event.listen(
+            engine,
+            "before_cursor_execute",
+            lambda _conn, _cursor, statement, *_args: statements.append(statement),
+        )
+        init_models_sync(engine)
+        upgrade_statements = list(statements)
+        statements.clear()
+        init_models_sync(engine)  # idempotent
+        inspector = inspect(engine)
+        resume_columns = [column["name"] for column in inspector.get_columns("resumes")]
+        preview_columns = [
+            column["name"] for column in inspector.get_columns("tailoring_previews")
+        ]
+        indexes = {
+            index["name"]: index for index in inspector.get_indexes("resumes")
+        }
+        with engine.connect() as connection:
+            defaults = dict(
+                connection.exec_driver_sql(
+                    "SELECT resume_id, is_default_master FROM resumes"
+                ).all()
+            )
+            predicate = connection.exec_driver_sql(
+                "SELECT pg_get_expr(indpred, indrelid) FROM pg_index "
+                "WHERE indexrelid = 'ux_resumes_single_default_master'::regclass"
+            ).scalar_one()
+        # A second master track is allowed; a second default is not.
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "INSERT INTO resumes (resume_id, content, is_master, created_at) "
+                "VALUES ('track-2', 't', TRUE, '2026-01-03T00:00:00')"
+            )
+        with pytest.raises(IntegrityError):
+            with engine.begin() as connection:
+                connection.exec_driver_sql(
+                    "UPDATE resumes SET is_default_master = TRUE "
+                    "WHERE resume_id = 'track-2'"
+                )
+    assert resume_columns.count("is_default_master") == 1
+    assert preview_columns.count("source_data") == 1
+    assert "ux_resumes_single_master" not in indexes
+    assert indexes["ux_resumes_single_default_master"]["unique"]
+    assert predicate == "is_default_master"
+    assert defaults == {"old-master": True, "child": False}
+    # The upgrade holds the writer reservation before it writes; an
+    # up-to-date schema does not wait for it.
+    lock = f"SELECT pg_advisory_xact_lock({POSTGRES_WRITER_LOCK_ARGS})"
+    add_column = next(
+        index for index, statement in enumerate(upgrade_statements)
+        if "ADD COLUMN is_default_master" in statement
+    )
+    assert lock in upgrade_statements[:add_column]
+    assert lock not in statements
+
+
 # -- writer reservation / contention -----------------------------------------
 
 
-async def test_concurrent_master_replacement_leaves_exactly_one_master(
+async def test_concurrent_master_writes_leave_exactly_one_default(
     isolated_db: Database,
 ) -> None:
     await isolated_db.create_resume(
-        content="Stuck master", is_master=True, processing_status="failed"
+        content="Stuck master",
+        is_master=True,
+        is_default_master=True,
+        processing_status="failed",
     )
     other = Database(database_url=isolated_db.database_url)
     try:
@@ -139,27 +235,40 @@ async def test_concurrent_master_replacement_leaves_exactly_one_master(
             (isolated_db if index % 2 else other).create_resume_atomic_master(
                 content=f"Upload {index}", processing_status="processing"
             )
-            for index in range(8)
+            for index in range(MAX_MASTER_RESUMES - 1)
         ]
         # Without the writer advisory lock two READ COMMITTED writers both see
-        # the failed master and the second insert violates the partial index.
+        # the stuck default and the second promotion violates the partial index.
         created = await asyncio.gather(*uploads)
-        assert len(created) == 8
+        assert len(created) == MAX_MASTER_RESUMES - 1
 
-        resumes = await isolated_db.list_resumes()
+        masters = await isolated_db.list_master_resumes()
         promotions = [
-            (isolated_db if index % 2 else other).set_master_resume(row["resume_id"])
-            for index, row in enumerate(resumes)
+            (isolated_db if index % 2 else other).set_default_master_resume(
+                row["resume_id"]
+            )
+            for index, row in enumerate(masters)
         ]
         assert all(await asyncio.gather(*promotions))
+        deletions = [
+            (isolated_db if index % 2 else other).delete_resume(row["resume_id"])
+            for index, row in enumerate(masters[:2])
+        ]
+        assert all(await asyncio.gather(*deletions))
     finally:
         await other.close()
 
     async with isolated_db._session() as session:
-        masters = await session.scalar(
+        master_count = await session.scalar(
             select(func.count()).select_from(Resume).where(Resume.is_master.is_(True))
         )
-    assert masters == 1
+        default_count = await session.scalar(
+            select(func.count())
+            .select_from(Resume)
+            .where(Resume.is_default_master.is_(True))
+        )
+    assert master_count == MAX_MASTER_RESUMES - 2
+    assert default_count == 1
 
 
 async def test_writer_lock_is_scoped_to_the_schema(
@@ -188,14 +297,22 @@ async def test_writer_lock_is_scoped_to_the_schema(
         await same_schema.close()
 
 
-async def test_partial_unique_index_rejects_a_second_master(isolated_db: Database) -> None:
-    await isolated_db.create_resume(content="Master", is_master=True)
+async def test_partial_unique_index_rejects_a_second_default_master(
+    isolated_db: Database,
+) -> None:
+    await isolated_db.create_resume(
+        content="Default", is_master=True, is_default_master=True
+    )
     with pytest.raises(IntegrityError):
-        await isolated_db.create_resume(content="Second master", is_master=True)
-    # Non-master rows are unconstrained by the partial index.
-    await isolated_db.create_resume(content="Tailored A")
-    await isolated_db.create_resume(content="Tailored B")
-    assert len(await isolated_db.list_resumes()) == 3
+        await isolated_db.create_resume(
+            content="Second default", is_master=True, is_default_master=True
+        )
+    # Other master tracks and non-master rows are unconstrained by the index.
+    await isolated_db.create_resume(content="Track two", is_master=True)
+    await isolated_db.create_resume(content="Track three", is_master=True)
+    await isolated_db.create_resume(content="Tailored")
+    assert len(await isolated_db.list_resumes()) == 4
+    assert len(await isolated_db.list_master_resumes()) == 3
 
 
 async def test_lock_timeout_is_database_busy_and_http_503(
@@ -457,6 +574,7 @@ async def _populate_sqlite(source: Database) -> dict[str, Any]:
     master = await source.create_resume(
         content="# Zoë Example — 東京",
         is_master=True,
+        is_default_master=True,
         processing_status="ready",
         processed_data={"personalInfo": {"name": "Zoë Example"}, "summary": "東京"},
         original_markdown="# raw",
@@ -491,12 +609,16 @@ async def _populate_sqlite(source: Database) -> dict[str, Any]:
                 created_at="2026-01-01T00:00:00+00:00",
                 expires_at="2026-01-02T00:00:00.5+00:00",
                 improvements=[{"path": "summary"}],
+                source_data={"summary": "condensed"},
                 response_data={"ok": True},
             )
         )
         await session.commit()
     source.set_api_key_ciphertext("openai", crypto.encrypt("sk-synthetic-migration"))
-    return {"master": master, "job": job, "tailored": tailored}
+    track = await source.create_resume(
+        content="Second track", is_master=True, processing_status="ready"
+    )
+    return {"master": master, "job": job, "tailored": tailored, "track": track}
 
 
 async def _snapshot(database: Database) -> dict[str, Any]:
@@ -534,7 +656,7 @@ async def test_sqlite_to_postgres_migration_round_trip(
         "applications": 1,
         "improvements": 1,
         "jobs": 1,
-        "resumes": 2,
+        "resumes": 3,
         "tailoring_previews": 1,
     }
     assert await _snapshot(isolated_db) == expected
@@ -542,7 +664,8 @@ async def test_sqlite_to_postgres_migration_round_trip(
         "sk-synthetic-migration"
     )
     master = await isolated_db.get_master_resume()
-    assert master is not None and master["is_master"] is True
+    assert master is not None and master["is_default_master"] is True
+    assert len(await isolated_db.list_master_resumes()) == 2
 
     # A non-empty target is refused, by the function and by the CLI.
     with pytest.raises(pg_migration.TargetNotEmptyError):

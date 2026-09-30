@@ -13,8 +13,8 @@ then use psycopg 3 under ``READ COMMITTED`` with a bounded ``lock_timeout``.
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import create_engine, event, inspect
-from sqlalchemy.engine import URL, Engine, make_url
+from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.engine import URL, Connection, Engine, make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.models import Base
@@ -22,6 +22,8 @@ from app.models import Base
 __all__ = [
     "Base",
     "POSTGRES_LOCK_TIMEOUT",
+    "POSTGRES_WRITER_LOCK_ARGS",
+    "POSTGRES_WRITER_LOCK_KEY",
     "make_async_engine",
     "make_sync_engine",
     "init_models_sync",
@@ -31,6 +33,20 @@ __all__ = [
 # How long a PostgreSQL writer waits for the global write reservation (or any
 # other lock) before failing with SQLSTATE 55P03. Mirrors SQLite busy_timeout.
 POSTGRES_LOCK_TIMEOUT = "5s"
+
+# Class key of the PostgreSQL transaction-scoped advisory lock that serializes
+# every writer (async documents and sync api_keys alike), mirroring SQLite's
+# single reserved writer. Any stable int4 works; this one spells "RMWR".
+POSTGRES_WRITER_LOCK_KEY = 0x524D5752
+# Advisory locks are database-wide, so the second key scopes the reservation to
+# the schema the tables live in (``search_path``): deployments or test runs in
+# different schemas of one database never serialize each other, while every
+# writer on the same tables still does. ``coalesce`` keeps the lock taken even
+# if no schema resolves: pg_advisory_xact_lock is strict and would silently
+# return without locking on a NULL argument.
+POSTGRES_WRITER_LOCK_ARGS = (
+    f"{POSTGRES_WRITER_LOCK_KEY}, hashtext(coalesce(current_schema(), ''))"
+)
 
 _POSTGRES_SCHEMES = ("postgresql", "postgres")
 
@@ -133,6 +149,31 @@ def make_sync_engine(target: Path | str) -> Engine:
     return engine
 
 
+def _postgres_upgrade_pending(conn: Connection) -> bool:
+    """Whether the additive upgrade in ``init_models_sync`` has work to do."""
+    inspector = inspect(conn)
+    resume_columns = {column["name"] for column in inspector.get_columns("resumes")}
+    preview_columns = {
+        column["name"] for column in inspector.get_columns("tailoring_previews")
+    }
+    resume_indexes = {index["name"] for index in inspector.get_indexes("resumes")}
+    if {"interview_prep", "processing_token", "is_default_master"} - resume_columns:
+        return True
+    if {"improvements", "source_data"} - preview_columns:
+        return True
+    if (
+        "ux_resumes_single_master" in resume_indexes
+        or "ux_resumes_single_default_master" not in resume_indexes
+    ):
+        return True
+    return bool(
+        conn.exec_driver_sql(
+            "SELECT EXISTS (SELECT 1 FROM resumes WHERE is_master) "
+            "AND NOT EXISTS (SELECT 1 FROM resumes WHERE is_default_master)"
+        ).scalar()
+    )
+
+
 def init_models_sync(engine: Engine) -> None:
     """Create all tables (idempotent) using a sync engine connection."""
     Base.metadata.create_all(engine)
@@ -140,6 +181,14 @@ def init_models_sync(engine: Engine) -> None:
     # ``create_all`` does not ALTER existing tables. Keep this additive
     # migration idempotent so older local databases can load resumes safely.
     with engine.begin() as conn:
+        postgres = conn.dialect.name == "postgresql"
+        if postgres and _postgres_upgrade_pending(conn):
+            # The upgrade can promote a default master, so it takes the same
+            # writer reservation as every other write, and a concurrently
+            # starting process re-inspects only after this one has finished.
+            # An up-to-date schema skips the lock, so opening a Database never
+            # waits on a busy writer.
+            conn.execute(text(f"SELECT pg_advisory_xact_lock({POSTGRES_WRITER_LOCK_ARGS})"))
         inspector = inspect(conn)
         resume_columns = {column["name"] for column in inspector.get_columns("resumes")}
         if "interview_prep" not in resume_columns:
@@ -148,7 +197,6 @@ def init_models_sync(engine: Engine) -> None:
             conn.exec_driver_sql("ALTER TABLE resumes ADD COLUMN processing_token TEXT")
 
         # SQLite stores booleans as 0/1; PostgreSQL has a real boolean type.
-        postgres = conn.dialect.name == "postgresql"
         true, false = ("TRUE", "FALSE") if postgres else ("1", "0")
         # Same predicate as the model's partial index for each dialect.
         default_predicate = "is_default_master" if postgres else "is_default_master = 1"

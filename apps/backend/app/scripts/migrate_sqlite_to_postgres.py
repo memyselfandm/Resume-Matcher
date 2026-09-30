@@ -22,7 +22,8 @@ which case its existing rows are deleted inside the same transaction.
 Stop the app before copying: writes made during the copy would not be
 included. The script first applies the app's idempotent additive schema
 migration to the source SQLite file (the same one the app runs at startup),
-so an older file may gain columns; its rows are never changed.
+so an older file may gain columns, and a file from before master tracks gets
+its earliest master marked as the default; no other row is changed.
 
 Memory: rows are streamed from both databases; verification keeps one
 primary-key-to-digest map per table for each side (roughly 150 bytes per row).

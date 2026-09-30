@@ -148,13 +148,13 @@ def test_other_postgres_errors_are_not_retryable(
     assert caught.value is error
 
 
-def test_postgres_ddl_has_single_master_predicate_and_byte_order_timestamps() -> None:
+def test_postgres_ddl_has_single_default_master_predicate_and_byte_order_timestamps() -> None:
     index = next(
         index for index in Resume.__table__.indexes
-        if index.name == "ux_resumes_single_master"
+        if index.name == "ux_resumes_single_default_master"
     )
     pg_index = str(CreateIndex(index).compile(dialect=postgresql.dialect()))
-    assert pg_index.rstrip().endswith("WHERE is_master")
+    assert pg_index.rstrip().endswith("WHERE is_default_master")
     pg_resumes = str(CreateTable(Resume.__table__).compile(dialect=postgresql.dialect()))
     assert 'created_at VARCHAR COLLATE "C"' in pg_resumes
     assert 'updated_at VARCHAR COLLATE "C"' in pg_resumes
@@ -168,10 +168,10 @@ def test_postgres_ddl_has_single_master_predicate_and_byte_order_timestamps() ->
 def test_sqlite_ddl_is_unchanged() -> None:
     index = next(
         index for index in Resume.__table__.indexes
-        if index.name == "ux_resumes_single_master"
+        if index.name == "ux_resumes_single_default_master"
     )
     assert str(CreateIndex(index).compile(dialect=sqlite.dialect())).rstrip().endswith(
-        "WHERE is_master = 1"
+        "WHERE is_default_master = 1"
     )
     ddl = str(CreateTable(Resume.__table__).compile(dialect=sqlite.dialect()))
     assert "COLLATE" not in ddl

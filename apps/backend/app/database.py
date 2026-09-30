@@ -33,6 +33,7 @@ from sqlalchemy.sql.elements import TextClause
 
 from app.config import settings
 from app.db_engine import (
+    POSTGRES_WRITER_LOCK_ARGS,
     init_models_sync,
     make_async_engine,
     make_sync_engine,
@@ -69,20 +70,6 @@ ProcessingFinishOutcome = Literal["committed", "stale", "missing"]
 # A user keeps at most this many master resumes (career tracks).
 MAX_MASTER_RESUMES = 5
 
-
-# Class key of the PostgreSQL transaction-scoped advisory lock that serializes
-# every writer (async documents and sync api_keys alike), mirroring SQLite's
-# single reserved writer. Any stable int4 works; this one spells "RMWR".
-POSTGRES_WRITER_LOCK_KEY = 0x524D5752
-# Advisory locks are database-wide, so the second key scopes the reservation to
-# the schema the tables live in (``search_path``): deployments or test runs in
-# different schemas of one database never serialize each other, while every
-# writer on the same tables still does. ``coalesce`` keeps the lock taken even
-# if no schema resolves: pg_advisory_xact_lock is strict and would silently
-# return without locking on a NULL argument.
-POSTGRES_WRITER_LOCK_ARGS = (
-    f"{POSTGRES_WRITER_LOCK_KEY}, hashtext(coalesce(current_schema(), ''))"
-)
 
 # lock_not_available (lock_timeout), serialization_failure, deadlock_detected.
 _POSTGRES_BUSY_SQLSTATES = frozenset({"55P03", "40001", "40P01"})
