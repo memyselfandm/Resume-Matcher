@@ -72,8 +72,9 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
     ) -> dict[str, Any]:
         """Upload a PDF, DOC or DOCX resume and parse it into structured data.
 
-        Provide either path (stdio only) or filename + content_base64. The
-        first uploaded resume becomes the master resume automatically.
+        Provide either path (stdio only) or filename + content_base64. Each
+        upload becomes a master resume; the first one is the default master.
+        Uploading fails when the maximum number of master resumes exists.
         """
         if (path is None) == (content_base64 is None):
             raise ToolError("Provide exactly one of path or content_base64.")
@@ -96,7 +97,7 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
 
     @server.tool(annotations=ToolAnnotations(read_only_hint=True))
     async def list_resumes(
-        include_master: Annotated[bool, Field(description="Include the master resume.")] = True,
+        include_master: Annotated[bool, Field(description="Include master resumes.")] = True,
     ) -> dict[str, Any]:
         """List stored resumes, most recently updated first."""
         body = await runtime.bridge.get_json(

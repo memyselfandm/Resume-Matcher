@@ -60,7 +60,7 @@
       "properties": {
         "include_master": {
           "default": true,
-          "description": "Include the master resume.",
+          "description": "Include master resumes.",
           "title": "Include Master",
           "type": "boolean"
         }

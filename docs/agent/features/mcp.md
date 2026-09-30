@@ -92,7 +92,7 @@ refuses any route path that is not made of such segments.
 | Tool | Backing route | Notes |
 |---|---|---|
 | `get_status` | in-process | LLM configured (no LLM call), DB counts, frontend reachability, `render_path_ok`, `pdf_export_ready`. |
-| `upload_resume(path \| filename + content_base64)` | `POST /resumes/upload` | PDF/DOC/DOCX, 4 MB limit checked before sending. `path` is stdio-only. First upload becomes master. |
+| `upload_resume(path \| filename + content_base64)` | `POST /resumes/upload` | PDF/DOC/DOCX, 4 MB limit checked before sending. `path` is stdio-only. Each upload is a new master (the first is the default); 409 at the master limit. |
 | `list_resumes(include_master)` | `GET /resumes/list` | |
 | `get_resume(resume_id, format)` | `GET /resumes?resume_id=` | `summary` (default), `json` (full `ResumeData`), `markdown`. |
 | `update_resume(resume_id, resume_data)` | `PATCH /resumes/{id}` | Full `ResumeData` replacement. |
@@ -161,7 +161,7 @@ Caches and tasks are process-local, which matches the single-process backend.
 ## Agent recipe
 
 1. `get_status` - confirm `llm_configured`; check `pdf_export_ready` if PDFs are needed.
-2. `upload_resume(path="~/cv.pdf")` - note `resume_id` (master on first upload).
+2. `upload_resume(path="~/cv.pdf")` - note `resume_id` (each upload is a master resume).
 3. `add_jobs(descriptions=["<job description>"])` - note `job_ids[0]`.
 4. `tailor_resume_preview(resume_id, job_id)` - review `summary_of_changes` and
    `keyword_score`; if `status` is `running`, poll `get_task`.

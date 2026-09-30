@@ -576,6 +576,34 @@ class TestUploadGuards:
         assert "only available on the stdio transport" in error_text(result)
 
 
+class TestMasterTracks:
+    async def test_every_upload_is_a_master_and_list_filters_them(
+        self, isolated_db: Database, sample_resume: dict[str, Any]
+    ) -> None:
+        encoded = base64.b64encode(b"%PDF-1.4 fake").decode()
+        async with mcp_session() as (client, _):
+            with mocked_upload_parsing(sample_resume):
+                uploads = [
+                    payload(
+                        await client.call_tool(
+                            "upload_resume", {"filename": "resume.pdf", "content_base64": encoded}
+                        )
+                    )
+                    for _ in range(2)
+                ]
+            listed = payload(await client.call_tool("list_resumes", {}))["resumes"]
+            without_masters = payload(
+                await client.call_tool("list_resumes", {"include_master": False})
+            )["resumes"]
+
+        assert [upload["is_master"] for upload in uploads] == [True, True]
+        stored = [await isolated_db.get_resume(upload["resume_id"]) for upload in uploads]
+        assert [row["is_default_master"] for row in stored] == [True, False]
+        assert {row["resume_id"] for row in listed} == {u["resume_id"] for u in uploads}
+        assert sum(row["is_default_master"] for row in listed) == 1
+        assert without_masters == []
+
+
 @contextmanager
 def probe_mocks(health_body: dict[str, Any] | None) -> Iterator[respx.MockRouter]:
     """Mock the backend/frontend probes; any other HTTP request fails the test.
