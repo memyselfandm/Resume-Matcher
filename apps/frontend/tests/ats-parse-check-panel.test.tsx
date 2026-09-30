@@ -372,6 +372,63 @@ describe('ParseCheckPanel', () => {
     expect(screen.queryByTestId('settings-changed')).not.toBeInTheDocument();
   });
 
+  it('clears the result when the checked resume changes, keeping the panel open', async () => {
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(makeOwnOutput([makeTemplateResult('swiss-single')]))
+    );
+    const { rerender } = renderPanel({ resumeId: 'master-1' });
+    fireEvent.click(screen.getByRole('switch', { name: /Check all templates/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run parse check' }));
+    await screen.findByTestId('parse-check-report');
+
+    rerender(
+      <ParseCheckPanel
+        resumeId="master-2"
+        settings={DEFAULT_TEMPLATE_SETTINGS}
+        lang="es"
+        defaultExpanded
+      />
+    );
+    // The shown report belonged to master-1.
+    expect(screen.queryByTestId('parse-check-report')).not.toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: /Check all templates/ })).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run parse check' }));
+    await screen.findByTestId('parse-check-report');
+    const [url] = fetchMock.mock.calls.at(-1) as [string];
+    expect(url).toBe('/api/v1/resumes/master-2/parse-check');
+    expect(lastRequestBody()).toMatchObject({ all_templates: true });
+  });
+
+  it('aborts a running check when the checked resume changes', async () => {
+    let signal: AbortSignal | undefined;
+    fetchMock.mockImplementationOnce(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          signal = init.signal ?? undefined;
+          init.signal?.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+          );
+        })
+    );
+    const { rerender } = renderPanel({ resumeId: 'master-1' });
+    fireEvent.click(screen.getByRole('button', { name: 'Run parse check' }));
+    expect(await screen.findByRole('status')).toBeInTheDocument();
+
+    rerender(
+      <ParseCheckPanel
+        resumeId="master-2"
+        settings={DEFAULT_TEMPLATE_SETTINGS}
+        lang="es"
+        defaultExpanded
+      />
+    );
+    expect(signal?.aborted).toBe(true);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run parse check' })).toBeEnabled();
+  });
+
   it('ignores the selected template after an all-templates check', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse(

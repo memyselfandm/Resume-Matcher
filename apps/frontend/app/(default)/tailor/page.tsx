@@ -572,7 +572,7 @@ export default function TailorPage() {
       >
         {/* ATS Score Breakdown — shown once a preview result is available */}
         {pendingResult?.data?.ats_score && <ATSScoreCard atsScore={pendingResult.data.ats_score} />}
-        {/* Parseability of the master resume's rendered PDF (keyword fit is above) */}
+        {/* Parseability of the selected source master's rendered PDF (keyword fit is above) */}
         <ParseCheckPanel
           resumeId={masterResumeId}
           settings={templateSettings}

@@ -1161,7 +1161,7 @@
     "savedVersionNote": "Checks the last saved version of this resume.",
     "unsavedChangesNote": "You have unsaved changes. The check uses the last saved version.",
     "settingsChanged": "Settings changed since this check. Run it again to see current results.",
-    "masterResumeNote": "Checks your master resume as rendered with your saved template settings. Check a tailored resume from the builder after you confirm it.",
+    "masterResumeNote": "Checks the selected master resume as rendered with your saved template settings. Check a tailored resume from the builder after you confirm it.",
     "noResume": "Save or upload a resume to run a parse check.",
     "empty": "Run a check to see how an ATS-style extractor reads this resume.",
     "scores": {

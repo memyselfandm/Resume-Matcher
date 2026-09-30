@@ -381,11 +381,15 @@ opt-in test: `uv run pytest -m pdf`.
 - **Builder** (`components/builder/resume-builder.tsx`, resume tab): a
   collapsible "ATS Parse Check" panel below the formatting controls checks the
   saved resume with the user's current template settings (the
-  `resume_builder_settings` localStorage entry) and the UI locale as
+  `resume_builder_settings` localStorage entry, read with
+  `lib/utils/stored-template-settings.ts`) and the UI locale as
   `settings.lang`, exactly as the PDF download renders it. A toggle switches to
   `all_templates`, shown as a per-template comparison table.
 - **Tailor** (`app/(default)/tailor/page.tsx`): the same panel next to the
-  keyword `ATSScoreCard`, checking the master resume.
+  keyword `ATSScoreCard`, checking the source master selected in the picker
+  (the default master until the user picks another). Switching the source
+  clears the shown result and cancels a running check; the panel does this for
+  any change of `resumeId`.
 - **Dashboard**: an "ATS Parse Check" card opens an upload dialog for any
   PDF/DOCX (`POST /ats/parse-check`).
 

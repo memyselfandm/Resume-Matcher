@@ -1161,7 +1161,7 @@
     "savedVersionNote": "Testa a última versão salva deste currículo.",
     "unsavedChangesNote": "Você tem alterações não salvas. O teste usa a última versão salva.",
     "settingsChanged": "As configurações mudaram desde este teste. Execute-o novamente para ver os resultados atuais.",
-    "masterResumeNote": "Testa seu currículo principal como ele é gerado com as configurações de modelo salvas. Teste um currículo adaptado no editor depois de confirmá-lo.",
+    "masterResumeNote": "Testa o currículo principal selecionado como ele é gerado com as configurações de modelo salvas. Teste um currículo adaptado no editor depois de confirmá-lo.",
     "noResume": "Salve ou envie um currículo para executar o teste.",
     "empty": "Execute um teste para ver como um extrator no estilo ATS lê este currículo.",
     "scores": {

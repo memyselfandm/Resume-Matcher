@@ -1161,7 +1161,7 @@
     "savedVersionNote": "Comprueba la última versión guardada de este currículum.",
     "unsavedChangesNote": "Tienes cambios sin guardar. La prueba usa la última versión guardada.",
     "settingsChanged": "La configuración cambió desde esta prueba. Vuelve a ejecutarla para ver los resultados actuales.",
-    "masterResumeNote": "Comprueba tu currículum principal tal como se genera con tu configuración de plantilla guardada. Puedes comprobar un currículum adaptado desde el editor después de confirmarlo.",
+    "masterResumeNote": "Comprueba el currículum principal seleccionado tal como se genera con tu configuración de plantilla guardada. Puedes comprobar un currículum adaptado desde el editor después de confirmarlo.",
     "noResume": "Guarda o sube un currículum para ejecutar la prueba.",
     "empty": "Ejecuta una prueba para ver cómo lee este currículum un extractor de tipo ATS.",
     "scores": {

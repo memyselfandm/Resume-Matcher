@@ -1161,7 +1161,7 @@
     "savedVersionNote": "Teste la dernière version enregistrée de ce CV.",
     "unsavedChangesNote": "Vous avez des modifications non enregistrées. Le test utilise la dernière version enregistrée.",
     "settingsChanged": "Les paramètres ont changé depuis ce test. Relancez-le pour voir les résultats actuels.",
-    "masterResumeNote": "Teste votre CV principal tel qu'il est généré avec vos paramètres de modèle enregistrés. Vous pourrez tester un CV adapté depuis l'éditeur après l'avoir confirmé.",
+    "masterResumeNote": "Teste le CV principal sélectionné tel qu'il est généré avec vos paramètres de modèle enregistrés. Vous pourrez tester un CV adapté depuis l'éditeur après l'avoir confirmé.",
     "noResume": "Enregistrez ou importez un CV pour lancer le test.",
     "empty": "Lancez un test pour voir comment un extracteur de type ATS lit ce CV.",
     "scores": {

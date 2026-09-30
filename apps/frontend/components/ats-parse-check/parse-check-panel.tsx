@@ -243,16 +243,42 @@ export interface ParseCheckPanelProps {
 }
 
 /** Parse check of a stored resume as rendered with the user's template settings. */
-export function ParseCheckPanel({
+export function ParseCheckPanel({ defaultExpanded = false, ...props }: ParseCheckPanelProps) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [allTemplates, setAllTemplates] = useState(false);
+  // A result belongs to one resume. Switching resumes (e.g. the tailor page's
+  // source-master picker) remounts the body, which clears the shown result and
+  // aborts a running check, while the panel keeps its open state and toggle.
+  return (
+    <ParseCheckPanelBody
+      key={props.resumeId ?? ''}
+      {...props}
+      expanded={expanded}
+      setExpanded={setExpanded}
+      allTemplates={allTemplates}
+      setAllTemplates={setAllTemplates}
+    />
+  );
+}
+
+interface ParseCheckPanelBodyProps extends Omit<ParseCheckPanelProps, 'defaultExpanded'> {
+  expanded: boolean;
+  setExpanded: (expanded: boolean) => void;
+  allTemplates: boolean;
+  setAllTemplates: (allTemplates: boolean) => void;
+}
+
+function ParseCheckPanelBody({
   resumeId,
   settings,
   lang = null,
   note,
-  defaultExpanded = false,
-}: ParseCheckPanelProps) {
+  expanded,
+  setExpanded,
+  allTemplates,
+  setAllTemplates,
+}: ParseCheckPanelBodyProps) {
   const { t } = useTranslations();
-  const [expanded, setExpanded] = useState(defaultExpanded);
-  const [allTemplates, setAllTemplates] = useState(false);
   const request = useParseCheckRequest<{ result: OwnOutputParseCheck; sent: SentSettings }>();
   const contentId = useId();
 
