@@ -27,7 +27,7 @@ apps/backend/app/
 
 | Method | Endpoint         | Description                                                                                           |
 | ------ | ---------------- | ----------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/health` | Liveness probe (no LLM call)                                                                          |
+| GET    | `/api/v1/health` | Liveness probe (no LLM call); also returns the data directory's `db_instance_id`                     |
 | GET    | `/api/v1/status` | Full system status (LLM probe + DB stats, each isolated → 200 with degraded state on partial failure) |
 
 ### Configuration
