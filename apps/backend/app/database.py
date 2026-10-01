@@ -23,11 +23,11 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.sql.elements import TextClause
 
@@ -122,6 +122,24 @@ class ResumeNotFoundError(ValueError):
         super().__init__(f"Resume not found: {resume_id}")
 
 
+_CREATE_INSTANCE_IDENTITY = (
+    "CREATE TABLE IF NOT EXISTS instance_identity ("
+    "singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton), "
+    "instance_id TEXT NOT NULL)"
+)
+
+
+async def _read_postgres_instance_id(conn: AsyncConnection) -> str | None:
+    """Read the schema's instance id; None when absent or not a UUID."""
+    if not await conn.scalar(text("SELECT to_regclass('instance_identity') IS NOT NULL")):
+        return None
+    value = await conn.scalar(text("SELECT instance_id FROM instance_identity"))
+    try:
+        return str(UUID(str(value).strip())) if value is not None else None
+    except ValueError:
+        return None
+
+
 def _now() -> str:
     """Current UTC time as an ISO-8601 string (TinyDB-era format)."""
     return datetime.now(timezone.utc).isoformat()
@@ -153,6 +171,8 @@ class Database:
         self._sync_engine = None
         self._sync_session_factory: sessionmaker[Session] | None = None
         self._initialized = False
+        # PostgreSQL instance id, cached once read back (ids never change).
+        self._instance_id: str | None = None
 
     @property
     def dialect(self) -> Literal["sqlite", "postgresql"]:
@@ -190,11 +210,16 @@ class Database:
             self._sync_engine, expire_on_commit=False
         )
         init_models_sync(self._sync_engine)
-        self._async_engine = make_async_engine(self._engine_target)
-        self._async_session_factory = async_sessionmaker(
-            self._async_engine, expire_on_commit=False
-        )
+        self._ensure_async_engine()
         self._initialized = True
+
+    def _ensure_async_engine(self) -> None:
+        """Create the async engine without creating tables (idempotent)."""
+        if self._async_engine is None:
+            self._async_engine = make_async_engine(self._engine_target)
+            self._async_session_factory = async_sessionmaker(
+                self._async_engine, expire_on_commit=False
+            )
 
     @property
     def _session(self) -> async_sessionmaker[AsyncSession]:
@@ -241,6 +266,61 @@ class Database:
             self._sync_engine = None
             self._sync_session_factory = None
         self._initialized = False
+        self._instance_id = None
+
+    # -- PostgreSQL instance identity -----------------------------------------
+    # On SQLite the data directory carries the instance id (app/instance_id.py).
+    # On PostgreSQL the active schema does, in a one-row table that is not part
+    # of the ORM metadata, so the SQLite schema is unchanged.
+
+    async def postgres_schema_established(self) -> bool:
+        """Whether the active schema already holds the application's tables.
+
+        The PostgreSQL counterpart of the SQLite file check: nothing is created.
+        """
+        if self._instance_id is not None:
+            return True
+        self._ensure_async_engine()
+        assert self._async_engine is not None
+        async with self._async_engine.connect() as conn:
+            return bool(await conn.scalar(text("SELECT to_regclass('resumes') IS NOT NULL")))
+
+    async def postgres_instance_id(self, *, create: bool) -> str | None:
+        """Return the active schema's instance UUID.
+
+        With ``create`` a missing or corrupt id is (re)created under the
+        per-schema writer lock, so concurrent processes converge on one id.
+        Without it, only an existing valid id is returned.
+        """
+        if self._instance_id is not None:
+            return self._instance_id
+        self._ensure_async_engine()
+        assert self._async_engine is not None
+        async with self._async_engine.connect() as conn:
+            value = await _read_postgres_instance_id(conn)
+        if value is None and create:
+            with _translate_write_errors():
+                async with self._async_engine.begin() as conn:
+                    await conn.execute(self._reserve_writer)
+                    await conn.execute(text(_CREATE_INSTANCE_IDENTITY))
+                    await conn.execute(
+                        text(
+                            "INSERT INTO instance_identity (instance_id) VALUES (:id) "
+                            "ON CONFLICT (singleton) DO NOTHING"
+                        ),
+                        {"id": str(uuid4())},
+                    )
+                    value = await _read_postgres_instance_id(conn)
+                    if value is None:
+                        logger.warning("Replacing an invalid database instance id")
+                        value = str(uuid4())
+                        await conn.execute(
+                            text("UPDATE instance_identity SET instance_id = :id"),
+                            {"id": value},
+                        )
+        if value is not None:
+            self._instance_id = value
+        return value
 
     # -- row -> dict converters ---------------------------------------------
 

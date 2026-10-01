@@ -27,7 +27,7 @@ apps/backend/app/
 
 | Method | Endpoint         | Description                                                                                           |
 | ------ | ---------------- | ----------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/health` | Liveness probe (no LLM call); also returns the data directory's `db_instance_id`                     |
+| GET    | `/api/v1/health` | Liveness probe (no LLM call); also returns the database's `db_instance_id`                           |
 | GET    | `/api/v1/status` | Full system status (LLM probe + DB stats, each isolated → 200 with degraded state on partial failure) |
 
 ### Configuration
@@ -115,6 +115,10 @@ default changes, and tracker read-modify-write operations, reserve the writer
 (`BEGIN IMMEDIATE` on SQLite, a per-schema `pg_advisory_xact_lock` on PostgreSQL),
 including across Database instances. ISO-8601 timestamp columns use the `C`
 collation on PostgreSQL so lexical comparison stays byte order.
+**Instance identity** (`db_instance_id` for `/health` and the MCP `get_status`):
+on SQLite a UUID file `DATA_DIR/instance_id`; on PostgreSQL a one-row
+`instance_identity` table in the active schema, created outside the ORM
+metadata under the writer reservation, so the SQLite schema is unchanged.
 **Jobs' dynamic fields** (`job_keywords`, `job_keywords_hash`, `company`/`role`,
 `preview_hash`, `preview_hashes`, and `preview_prompt_id`) are stored in
 `metadata_json` and flattened on read; immutable preview identity, fingerprints,

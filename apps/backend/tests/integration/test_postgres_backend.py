@@ -11,10 +11,11 @@ positions, byte-order timestamp ordering and a verified migration round trip.
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -31,6 +32,11 @@ from app.database import (
     DatabaseBusyError,
 )
 from app.db_engine import init_models_sync, make_sync_engine
+from app.instance_id import (
+    InstanceIdUnavailableError,
+    storage_established,
+    storage_instance_id,
+)
 from app.main import app
 from app.models import Application, Base, Job, Resume, TailoringPreview
 from app.scripts import migrate_sqlite_to_postgres as pg_migration
@@ -295,6 +301,85 @@ async def test_writer_lock_is_scoped_to_the_schema(
     finally:
         await neighbour.close()
         await same_schema.close()
+
+
+# -- instance identity ---------------------------------------------------------
+
+
+async def test_instance_id_is_shared_by_engines_on_one_schema(
+    isolated_db: Database, new_postgres_schema_url: Callable[[], str]
+) -> None:
+    url = new_postgres_schema_url()
+    first, second, later = (Database(database_url=url) for _ in range(3))
+    try:
+        await first.get_stats()  # establish the schema's tables
+        # Two processes minting the id at once converge on one value.
+        ids = await asyncio.gather(
+            first.postgres_instance_id(create=True), second.postgres_instance_id(create=True)
+        )
+        assert ids[0] == ids[1]
+        assert UUID(ids[0])
+        assert await later.postgres_instance_id(create=False) == ids[0]
+    finally:
+        for database in (first, second, later):
+            await database.close()
+
+
+async def test_instance_id_differs_between_schemas(
+    isolated_db: Database, second_postgres_schema_url: str
+) -> None:
+    neighbour = Database(database_url=second_postgres_schema_url)
+    try:
+        await neighbour.get_stats()
+        own = await isolated_db.postgres_instance_id(create=True)
+        other = await neighbour.postgres_instance_id(create=True)
+        assert own and other and own != other
+    finally:
+        await neighbour.close()
+
+
+async def test_empty_schema_is_not_established_and_gets_no_id(
+    isolated_db: Database, second_postgres_schema_url: str
+) -> None:
+    empty = Database(database_url=second_postgres_schema_url)
+    try:
+        assert await storage_established(empty) is False
+        assert await storage_instance_id(empty, create=False) is None
+        # Neither check created anything in the schema.
+        async with empty._async_engine.connect() as conn:  # type: ignore[union-attr]
+            tables = await conn.scalar(
+                text("SELECT count(*) FROM pg_tables WHERE schemaname = current_schema()")
+            )
+        assert tables == 0
+        await empty.get_stats()
+        assert await storage_established(empty) is True
+    finally:
+        await empty.close()
+
+
+async def test_invalid_stored_instance_id_is_replaced(isolated_db: Database) -> None:
+    created = await isolated_db.postgres_instance_id(create=True)
+    async with isolated_db._session() as session:
+        await session.execute(text("UPDATE instance_identity SET instance_id = 'not-a-uuid'"))
+        await session.commit()
+    fresh = Database(database_url=isolated_db.database_url)
+    try:
+        assert await fresh.postgres_instance_id(create=False) is None
+        replaced = await fresh.postgres_instance_id(create=True)
+    finally:
+        await fresh.close()
+    assert replaced and replaced != created and UUID(replaced)
+
+
+async def test_unreachable_postgres_reports_an_unavailable_instance_id() -> None:
+    database = Database(database_url="postgresql+psycopg://user:secret@127.0.0.1:1/missing")
+    try:
+        with pytest.raises(InstanceIdUnavailableError):
+            await storage_established(database)
+        with pytest.raises(InstanceIdUnavailableError):
+            await storage_instance_id(database, create=True)
+    finally:
+        await database.close()
 
 
 async def test_partial_unique_index_rejects_a_second_default_master(

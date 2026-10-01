@@ -55,14 +55,19 @@ frontend's `/print/resumes/{id}` page. That page fetches the resume
 `http://127.0.0.1:8000`). With stdio you therefore need:
 
 1. the frontend running (`FRONTEND_BASE_URL`, default `http://localhost:3000`),
-2. the backend HTTP server running on the **same `DATA_DIR`** as the MCP
-   process, and
+2. the backend HTTP server running on the **same database** as the MCP
+   process (the same `DATA_DIR`; with PostgreSQL, the same `DATABASE_URL` and
+   schema), and
 3. Chromium installed (`uv run playwright install chromium`).
 
-`get_status` checks this: it compares the local `db_instance_id` (a UUID stored
-in `DATA_DIR/instance_id`, minted once the directory holds a database) with the
-one `GET /api/v1/health` reports at the print page's data origin (`null` while
-that backend's directory has no database yet).
+`get_status` checks this: it compares the local `db_instance_id` with the one
+`GET /api/v1/health` reports at the print page's data origin. The id is a UUID
+minted once the database exists: on SQLite it is stored in
+`DATA_DIR/instance_id` (`null` while the directory has no database file); on
+PostgreSQL it is stored in the active schema's one-row `instance_identity`
+table (`null` while the schema has no Resume Matcher tables), so two processes
+on the same URL and schema report the same id and another schema reports a
+different one.
 
 | `render_path_ok` | Meaning |
 |---|---|

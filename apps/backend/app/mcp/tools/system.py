@@ -14,7 +14,7 @@ from pydantic import Field
 
 from app.config import settings
 from app.database import db
-from app.instance_id import database_established, get_db_instance_id
+from app.instance_id import storage_established, storage_instance_id
 from app.llm import get_llm_config
 from app.mcp.runtime import MCPRuntime
 
@@ -91,7 +91,8 @@ def _render_path(probe: BackendProbe, local_id: str | None, origin: str) -> tupl
     if not probe.reachable:
         return False, (
             f"No backend answered at {origin}. PDF export needs the backend HTTP "
-            "server running on the same DATA_DIR as this MCP server."
+            "server running on the same database (DATA_DIR, or DATABASE_URL for "
+            "PostgreSQL) as this MCP server."
         )
     if not probe.reports_instance_id:
         return "unknown", f"The backend at {origin} does not report db_instance_id."
@@ -100,14 +101,16 @@ def _render_path(probe: BackendProbe, local_id: str | None, origin: str) -> tupl
         if remote_id == local_id:
             return True, f"The backend at {origin} uses the same database."
         return False, (
-            f"The backend at {origin} uses a different data directory; PDFs would "
-            "render another database's resumes. Point both at the same DATA_DIR."
+            f"The backend at {origin} uses a different database; PDFs would render "
+            "another database's resumes. Point both at the same DATA_DIR (or "
+            "DATABASE_URL for PostgreSQL)."
         )
     if remote_id is None and local_id is None:
         return "unknown", "Neither database has been created yet, so identity cannot be established."
     return False, (
         f"Only one of this server and the backend at {origin} has a database, so "
-        "they use different data directories. Point both at the same DATA_DIR."
+        "they use different databases. Point both at the same DATA_DIR (or "
+        "DATABASE_URL for PostgreSQL)."
     )
 
 
@@ -127,7 +130,7 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         # Checked first: reading the LLM config or stats creates the database.
         local_established = False
         try:
-            local_established = database_established()
+            local_established = await storage_established(db)
         except OSError:
             logger.exception("MCP status: data directory unavailable")
 
@@ -160,7 +163,7 @@ def register(server: MCPServer, runtime: MCPRuntime) -> None:
         render_path_ok: RenderPathOk
         local_id: str | None = None
         try:
-            local_id = get_db_instance_id(create=local_established)
+            local_id = await storage_instance_id(db, create=local_established)
             render_path_ok, render_path_detail = _render_path(probe, local_id, origin)
         except OSError:
             logger.exception("MCP status: database instance id unavailable")

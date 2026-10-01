@@ -5,7 +5,7 @@ import os
 import socket
 import sys
 import tempfile
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
 from typing import Any, NoReturn
 from uuid import uuid4
@@ -403,6 +403,25 @@ def second_postgres_schema_url() -> Iterator[str]:
         yield postgres_schema_url(schema)
     finally:
         _postgres_admin(f'DROP SCHEMA "{schema}" CASCADE')
+
+
+@pytest.fixture
+def new_postgres_schema_url() -> Iterator[Callable[[], str]]:
+    """Factory of empty schemas on the PostgreSQL test server, dropped after the test."""
+    schemas: list[str] = []
+
+    def create() -> str:
+        assert USING_POSTGRES, "requires TEST_DATABASE_URL (PostgreSQL)"
+        schema = f"test_{uuid4().hex}"
+        _postgres_admin(f'CREATE SCHEMA "{schema}"')
+        schemas.append(schema)
+        return postgres_schema_url(schema)
+
+    try:
+        yield create
+    finally:
+        for schema in schemas:
+            _postgres_admin(f'DROP SCHEMA "{schema}" CASCADE')
 
 
 @pytest.fixture

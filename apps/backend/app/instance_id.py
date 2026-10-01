@@ -1,10 +1,14 @@
-"""Stable identity for the data directory backing this process.
+"""Stable identity for the database backing this process.
 
 The MCP stdio server and the HTTP backend that serves the print page must read
 the same database for PDF export to render the resume the agent just edited.
-Each data directory with an established database carries a random UUID in
-``instance_id``; comparing the value reported by ``GET /api/v1/health`` with
-the local one proves (or disproves) that both processes share storage.
+Each established database carries a random UUID; comparing the value reported
+by ``GET /api/v1/health`` with the local one proves (or disproves) that both
+processes share storage.
+
+On SQLite the id lives in the data directory's ``instance_id`` file. On
+PostgreSQL it lives in the active schema (``Database.postgres_instance_id``),
+because the data directory says nothing about which database is used.
 """
 
 import logging
@@ -14,7 +18,10 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.config import settings
+from app.database import Database, DatabaseBusyError
 
 logger = logging.getLogger(__name__)
 
@@ -126,3 +133,35 @@ def get_db_instance_id(data_dir: Path | None = None, *, create: bool = True) -> 
         else:
             _replace_corrupt(directory, path)
     raise OSError(f"Could not establish a database instance id in {directory}")
+
+
+class InstanceIdUnavailableError(OSError):
+    """The database could not be queried for its instance id."""
+
+
+async def storage_established(database: Database) -> bool:
+    """Return whether the storage behind ``database`` already holds a database.
+
+    SQLite: the data directory holds the database file. PostgreSQL: the active
+    schema holds the application's tables. Nothing is created either way.
+    """
+    if database.dialect == "sqlite":
+        return database_established()
+    try:
+        return await database.postgres_schema_established()
+    except SQLAlchemyError as error:
+        raise InstanceIdUnavailableError("PostgreSQL schema check failed") from error
+
+
+async def storage_instance_id(database: Database, *, create: bool) -> str | None:
+    """Return the instance id of the storage behind ``database``.
+
+    Same contract as ``get_db_instance_id``; on PostgreSQL the id is read from
+    (and with ``create`` written to) the active schema.
+    """
+    if database.dialect == "sqlite":
+        return get_db_instance_id(create=create)
+    try:
+        return await database.postgres_instance_id(create=create)
+    except (SQLAlchemyError, DatabaseBusyError) as error:
+        raise InstanceIdUnavailableError("PostgreSQL instance id unavailable") from error

@@ -16,7 +16,7 @@ import copy
 import json
 import logging
 import textwrap
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,11 +32,14 @@ from mcp_types import CallToolResult
 
 from app.database import Database
 from app.instance_id import get_db_instance_id
+from app.mcp.tools import system as system_tools
+from app.routers import health as health_routes
 from app.main import app
 from app.mcp.bridge import MAX_UPLOAD_BYTES, AppBridge
 from app.mcp.runtime import MCPRuntime
 from app.mcp.server import build_mcp_server
 from app.schemas.models import InterviewPrepData, InterviewPrepQuestion, ResumeData
+from tests.conftest import USING_POSTGRES
 
 SNAPSHOT_PATH = Path(__file__).parent / "snapshots" / "mcp_tools.json"
 MODERN = "2026-07-28"
@@ -633,12 +636,51 @@ async def seed_resume(db: Database) -> None:
     await db.create_resume(content="# Jane Doe", processing_status="ready", is_master=True)
 
 
-async def real_health(monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> dict[str, Any]:
-    """Call the real /health route as a backend running on ``data_dir``."""
+# Storage another process could use: a data directory on SQLite, a database
+# on its own schema on PostgreSQL (where the data directory names no database).
+Storage = Path | Database
+
+
+@pytest.fixture
+async def empty_storage(
+    tmp_path: Path, new_postgres_schema_url: Callable[[], str]
+) -> AsyncIterator[Callable[[str], Storage]]:
+    """Factory of storage that holds no database yet, for the active backend."""
+    opened: list[Database] = []
+
+    def create(name: str) -> Storage:
+        if not USING_POSTGRES:
+            return tmp_path / name
+        database = Database(database_url=new_postgres_schema_url())
+        opened.append(database)
+        return database
+
+    try:
+        yield create
+    finally:
+        for database in opened:
+            await database.close()
+
+
+async def establish(storage: Storage) -> None:
+    """Create the database in ``storage``, as a backend's first request does."""
+    if isinstance(storage, Database):
+        await storage.get_stats()
+        return
+    database = Database(db_path=storage / "resume_matcher.db")
+    await database.get_stats()
+    await database.close()
+
+
+async def real_health(monkeypatch: pytest.MonkeyPatch, storage: Storage) -> dict[str, Any]:
+    """Call the real /health route as a backend running on ``storage``."""
     from app.config import settings
 
     with monkeypatch.context() as patched:
-        patched.setattr(settings, "data_dir", data_dir)
+        if isinstance(storage, Database):
+            patched.setattr(health_routes, "db", storage)
+        else:
+            patched.setattr(settings, "data_dir", storage)
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://backend"
         ) as backend:
@@ -668,10 +710,16 @@ class TestGetStatus:
         assert status["frontend"]["reachable"] is True
 
     async def test_render_path_unknown_when_both_databases_empty(
-        self, isolated_db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        isolated_db: Database,
+        empty_storage: Callable[[str], Storage],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # Neither this process's data dir nor the backend's holds a database.
-        health = await real_health(monkeypatch, tmp_path / "empty-backend-data")
+        if USING_POSTGRES:
+            # The per-test schema's tables exist from the start; use an empty one.
+            monkeypatch.setattr(system_tools, "db", empty_storage("local"))
+        # Neither this process's storage nor the backend's holds a database.
+        health = await real_health(monkeypatch, empty_storage("empty-backend-data"))
         assert health["db_instance_id"] is None
         with probe_mocks(health):
             async with mcp_session() as (client, _):
@@ -680,13 +728,14 @@ class TestGetStatus:
         assert status["pdf_export_ready"] is False
 
     async def test_render_path_false_for_different_data_dir(
-        self, isolated_db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        isolated_db: Database,
+        empty_storage: Callable[[str], Storage],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        other_dir = tmp_path / "other-data"
-        other_db = Database(db_path=other_dir / "resume_matcher.db")
-        await other_db.get_stats()  # establish the other backend's database
-        await other_db.close()
-        health = await real_health(monkeypatch, other_dir)
+        other = empty_storage("other-data")
+        await establish(other)  # establish the other backend's database
+        health = await real_health(monkeypatch, other)
         assert health["db_instance_id"]
         await isolated_db.get_stats()  # establish this (still empty) database
         with probe_mocks(health):
@@ -695,13 +744,17 @@ class TestGetStatus:
         # Both ids exist and differ: false even though this database is empty.
         assert status["database"]["total_resumes"] == 0
         assert status["render_path_ok"] is False
-        assert "different data directory" in status["render_path_detail"]
+        assert "different database" in status["render_path_detail"]
 
     async def test_render_path_false_when_only_one_side_has_a_database(
-        self, isolated_db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        isolated_db: Database,
+        empty_storage: Callable[[str], Storage],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         await seed_resume(isolated_db)
-        health = await real_health(monkeypatch, tmp_path / "empty-backend-data")
+        health = await real_health(monkeypatch, empty_storage("empty-backend-data"))
+        assert health["db_instance_id"] is None
         with probe_mocks(health):
             async with mcp_session() as (client, _):
                 status = payload(await client.call_tool("get_status", {}))
@@ -750,10 +803,23 @@ class TestHealthInstanceId:
             await seed_resume(isolated_db)
             first = (await backend.get("/api/v1/health")).json()
             second = (await backend.get("/api/v1/health")).json()
-        assert before == {"status": "healthy", "db_instance_id": None}
         assert first["status"] == "healthy"
         assert first["db_instance_id"] == second["db_instance_id"]
-        assert (settings.data_dir / "instance_id").read_text() == first["db_instance_id"]
+        if USING_POSTGRES:
+            # The per-test schema's tables exist from the start (see conftest),
+            # and the id lives in the schema: another engine on it reads it back.
+            assert before == first
+            assert isolated_db.database_url is not None
+            reader = Database(database_url=isolated_db.database_url)
+            try:
+                stored = await reader.postgres_instance_id(create=False)
+            finally:
+                await reader.close()
+            assert stored == first["db_instance_id"]
+            assert not (settings.data_dir / "instance_id").exists()
+        else:
+            assert before == {"status": "healthy", "db_instance_id": None}
+            assert (settings.data_dir / "instance_id").read_text() == first["db_instance_id"]
 
 
 async def create_tailored_resume(
